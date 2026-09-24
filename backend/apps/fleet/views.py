@@ -1,9 +1,10 @@
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from apps.accounts.models import organization_ids_for
+from apps.accounts.models import Role, organization_ids_for
 from apps.accounts.permissions import IsAuthenticated, IsOrganizationAdmin
 from apps.audit.models import record_audit
 from apps.common.models import OrganizationScopedQuerySet
@@ -19,11 +20,38 @@ class _OrgScopedViewSet(viewsets.ModelViewSet):
     """ViewSet whose query set is always constrained to the caller's
     organizations (operator isolation, blueprint 3)."""
 
+    ADMIN_ROLES = (Role.OPERATOR_ADMIN, Role.PLATFORM_ADMIN)
+
     def get_queryset(self):
         qs = super().get_queryset()
         if not isinstance(qs, OrganizationScopedQuerySet):
             return qs
         return qs.for_organizations(organization_ids_for(self.request.user))
+
+    def _require_admin(self, org_id):
+        """Reject a write whose target organization the caller does not
+        administer (defence in depth behind IsOrganizationAdmin)."""
+        user = self.request.user
+        if user and user.is_superuser:
+            return
+        is_admin = user.memberships.filter(
+            is_active=True, organization_id=org_id, role__in=self.ADMIN_ROLES
+        ).exists()
+        if not is_admin:
+            raise PermissionDenied()
+
+    def perform_create(self, serializer):
+        org = serializer.validated_data.get("organization")
+        if org is not None:
+            self._require_admin(org.pk)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        org = serializer.validated_data.get("organization")
+        if org is not None and serializer.instance is not None:
+            if getattr(serializer.instance, "organization_id", None) != org.pk:
+                self._require_admin(org.pk)
+        serializer.save()
 
 
 class VehicleViewSet(_OrgScopedViewSet):
@@ -37,11 +65,10 @@ class VehicleViewSet(_OrgScopedViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
-        organization = serializer.validated_data.get("organization")
-        serializer.save()
+        super().perform_create(serializer)
         record_audit(
             actor=self.request.user,
-            organization=organization,
+            organization=serializer.instance.organization,
             action="vehicle.created",
             entity_type="vehicle",
             entity_id=serializer.instance.pk,

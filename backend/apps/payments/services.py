@@ -39,6 +39,21 @@ def create_payment_attempt(
     if order is None:
         raise PaymentError("Order not found.")
 
+    # The attempt must belong to the order's organization: never let a caller
+    # attach a payment to a foreign organization (operator isolation).
+    if organization_id is None:
+        organization_id = order.organization_id
+    elif order.organization_id is not None and order.organization_id != organization_id:
+        raise PaymentError("The order belongs to a different organization.")
+
+    # A collection must match the priced order total; this is what makes an
+    # under-payment impossible (blueprint 13, 23).
+    if amount_minor != order.total_minor or currency != order.currency:
+        raise PaymentError(
+            f"Attempt amount must match the order total "
+            f"({order.total_minor} {order.currency})."
+        )
+
     with transaction.atomic():
         attempt, created = PaymentAttempt.objects.get_or_create(
             provider=provider_slug,
@@ -81,8 +96,12 @@ def create_payment_attempt(
         return attempt
 
 
+@transaction.atomic
 def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
     """Normalize and apply a provider callback exactly once per result.
+
+    Atomic: the attempt state transition, any ledger postings, and the audit
+    record commit together or not at all (blueprint 17).
 
     Returns (attempt, applied) where applied is False for duplicate/stale
     callbacks that must not create a second business effect."""

@@ -1,10 +1,10 @@
-from rest_framework import mixins, serializers, status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import organization_ids_for
-from apps.common.models import OrganizationScopedQuerySet
+from apps.orders.models import Order
 from apps.payments.models import LedgerEntry, PaymentAttempt
 from apps.payments.services import (
     PaymentError,
@@ -54,10 +54,9 @@ class PaymentAttemptViewSet(viewsets.GenericViewSet):
         return PaymentAttemptSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
-        if isinstance(qs, OrganizationScopedQuerySet):
-            qs = qs.for_organizations(organization_ids_for(self.request.user))
-        return qs.filter(
+        if self.request.user.is_superuser:
+            return PaymentAttempt.objects.all()
+        return PaymentAttempt.objects.filter(
             organization_id__in=organization_ids_for(self.request.user)
         )
 
@@ -78,11 +77,22 @@ class PaymentAttemptViewSet(viewsets.GenericViewSet):
         data = serializer.validated_data
         import uuid
 
-        org_ids = organization_ids_for(request.user)
-        org_id = data.get("organization") or (org_ids[0] if org_ids else None)
+        order = Order.objects.filter(pk=data["order"]).first()
+        if order is None:
+            return Response(
+                {"detail": "Order not found."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        user = request.user
+        can_pay = user.is_superuser or order.customer_id == user.pk
+        if not can_pay:
+            org_ids = set(organization_ids_for(user))
+            if not (order.organization_id and order.organization_id in org_ids):
+                return Response(
+                    {"detail": "Order not found."}, status=status.HTTP_404_NOT_FOUND
+                )
         try:
             attempt = create_payment_attempt(
-                organization_id=org_id,
+                organization_id=data.get("organization"),
                 order_id=data["order"],
                 idempotency_key=data.get("idempotency_key") or uuid.uuid4(),
                 amount_minor=data["amount_minor"],

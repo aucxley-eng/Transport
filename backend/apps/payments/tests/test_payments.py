@@ -149,3 +149,24 @@ class PaymentFlowTestCase(TestCase):
         )
         self.assertFalse(applied)
         self.assertEqual(stale.state, PaymentAttempt.State.SUCCESS)
+
+    def test_amount_must_match_order_total(self):
+        with self.assertRaises(PaymentError):
+            create_payment_attempt(
+                organization_id=self.org.pk,
+                order_id=self.order.pk,
+                idempotency_key="66666666-6666-6666-6666-666666666666",
+                amount_minor=100,  # under-payment attempt
+                currency="KES",
+            )
+
+    def test_organization_must_match_order_organization(self):
+        other = Organization.objects.create(name="Other Ltd", slug="other-org")
+        with self.assertRaises(PaymentError):
+            create_payment_attempt(
+                organization_id=other.pk,
+                order_id=self.order.pk,
+                idempotency_key="77777777-7777-7777-7777-777777777777",
+                amount_minor=30000,
+                currency="KES",
+            )

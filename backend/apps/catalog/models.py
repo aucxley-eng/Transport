@@ -163,8 +163,13 @@ class Quote(BaseModel):
 
         if self.status != self.Status.VALID:
             raise ValueError("Only valid quotes can be accepted.")
+        now = timezone.now()
+        if self.expires_at is not None and now > self.expires_at:
+            self.status = self.Status.EXPIRED
+            self.save(update_fields=["status", "updated_at"])
+            raise ValueError("Quote has expired.")
         self.status = self.Status.ACCEPTED
-        self.accepted_at = timezone.now()
+        self.accepted_at = now
         self.save(update_fields=["status", "accepted_at", "updated_at"])
 
 

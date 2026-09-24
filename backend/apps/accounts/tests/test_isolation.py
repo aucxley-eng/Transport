@@ -89,3 +89,26 @@ class IsolationTestCase(APITestCase):
             HTTP_AUTHORIZATION=self.token_b,
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_memberships_list_is_scoped_to_own_org(self):
+        self._org_owned_data()
+        response = self.client.get("/api/v1/memberships/", HTTP_AUTHORIZATION=self.token_a)
+        self.assertEqual(response.status_code, 200)
+        orgs = {m["organization"] for m in response.json()}
+        self.assertEqual(orgs, {str(self.org_a.pk)})
+
+    def test_org_members_route_is_scoped_by_url_and_honours_foreign_404(self):
+        self._org_owned_data()
+        # Readable for a member of the URL's organization.
+        response = self.client.get(
+            f"/api/v1/organizations/{self.org_a.pk}/members/",
+            HTTP_AUTHORIZATION=self.token_a,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["organization"], str(self.org_a.pk))
+        # Foreign organization is not exposed and not 500s.
+        response = self.client.get(
+            f"/api/v1/organizations/{self.org_a.pk}/members/",
+            HTTP_AUTHORIZATION=self.token_b,
+        )
+        self.assertEqual(response.status_code, 404)

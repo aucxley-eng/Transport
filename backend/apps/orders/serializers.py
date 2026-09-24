@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.accounts.models import organization_ids_for
 from apps.catalog.models import Quote
 from apps.orders.models import Order
 
@@ -14,6 +15,13 @@ class OrderCreateSerializer(serializers.Serializer):
             quote = Quote.objects.get(pk=value)
         except Quote.DoesNotExist:
             raise serializers.ValidationError("Quote not found.")
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and not user.is_superuser:
+            # A quote from an organization the caller does not belong to must
+            # not be usable to mint an order in that organization.
+            if quote.organization_id is not None and quote.organization_id not in organization_ids_for(user):
+                raise serializers.ValidationError("Quote not found.")
         self._quote = quote
         return value
 

@@ -81,15 +81,27 @@ class MembershipViewSet(viewsets.GenericViewSet):
             return [IsPlatformAdmin()]
         return [IsAuthenticated()]
 
-    def list(self, request):
-        org_id = request.query_params.get("organization")
-        if org_id and org_id not in organization_ids_for(request.user):
-            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
-        qs = Membership.objects.all()
+    def list(self, request, pk=None):
+        """List memberships scoped to the caller's organizations. A specific
+        organization (URL ``pk`` for ``/organizations/<pk>/members/`` or the
+        ``organization`` query param) is honoured only when the caller belongs
+        to it; foreign organizations are treated as not found."""
+
+        org_ids = organization_ids_for(request.user)
+        org_id = pk or request.query_params.get("organization")
         if org_id:
-            qs = qs.filter(organization_id=org_id)
+            if not request.user.is_superuser and str(org_id) not in {
+                str(oid) for oid in org_ids
+            }:
+                return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+            qs = Membership.objects.filter(organization_id=org_id)
+        elif request.user.is_superuser:
+            qs = Membership.objects.all()
+        else:
+            qs = Membership.objects.filter(organization_id__in=org_ids)
         data = [{
             "id": str(m.id),
+            "organization": str(m.organization_id),
             "user": str(m.user_id),
             "user_name": m.user.full_name or m.user.phone,
             "role": m.role,
