@@ -90,8 +90,8 @@ def publish_single(event_id):
     try:
         for subscriber in _SUBSCRIBERS.get(event.event_type, ()):
             subscriber(serialized)
-    except Exception:  # noqa: BLE001 - a subscriber failure must not lose the event.
-        message = f"outbox {event.pk} failed after attempt {event.attempts}"
+    except Exception as exc:  # noqa: BLE001 - keep the event for inspection/retry.
+        message = f"outbox {event.pk} failed after attempt {event.attempts}: {exc}"
         logger.exception(message)
         from .models import OutboxEvent as Ev
 
