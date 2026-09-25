@@ -16,7 +16,19 @@ from apps.accounts.permissions import IsAuthenticated
 from apps.audit.models import record_audit
 from apps.catalog.models import Place, Quote, Service
 from apps.fleet.models import Driver, Vehicle
+from apps.goods.consolidation import (
+    FreightError,
+    assess_coverage,
+    confirm_departure,
+    empty_running_report,
+    find_backhaul_opportunities,
+    propose_consolidation,
+    publish_plan,
+    supersede_plan,
+    validate_plan,
+)
 from apps.goods.models import (
+    ConsolidationPlan,
     CustodyEvent,
     FreightTrip,
     Manifest,
@@ -25,6 +37,7 @@ from apps.goods.models import (
     ShipmentException,
 )
 from apps.goods.serializers import (
+    ConsolidationPlanSerializer,
     CustodyEventSerializer,
     FreightTripSerializer,
     ManifestSerializer,
@@ -133,6 +146,7 @@ class ShipmentViewSet(
                 service_window_start=request.data.get("service_window_start"),
                 service_window_end=request.data.get("service_window_end"),
                 packages=request.data.get("packages") or [],
+                load_type=request.data.get("load_type"),
             )
         except GoodsError as exc:
             return _err(exc)
@@ -384,6 +398,176 @@ class FreightTripViewSet(
             FreightTripSerializer(trip).data, status=status.HTTP_201_CREATED
         )
 
+
+    @action(detail=True, methods=["post"], url_path="consolidation/propose")
+    def propose(self, request, pk=None):
+        """Propose the next consolidation plan version for this trip."""
+        trip = self.get_object()
+        self._require_ops()
+        shipments = Shipment.objects.filter(pk__in=request.data.get("shipments") or [])
+        try:
+            plan = propose_consolidation(
+                organization=trip.organization,
+                trip=trip,
+                shipments=list(shipments),
+                proposed_by=request.user,
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            ConsolidationPlanSerializer(plan).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["get"], url_path="consolidation")
+    def consolidation(self, request, pk=None):
+        """Every plan version for this trip, newest first."""
+        trip = self.get_object()
+        plans = trip.consolidation_plans.prefetch_related(
+            "stops", "shipments__shipment"
+        )
+        return Response(ConsolidationPlanSerializer(plans, many=True).data)
+
+    @action(detail=True, methods=["get"])
+    def coverage(self, request, pk=None):
+        """The coverage floor: revenue on the truck vs the cost of running it."""
+        trip = self.get_object()
+        assessment = assess_coverage(trip)
+        return Response(
+            {
+                "trip": str(trip.pk),
+                "committed_minor": assessment["committed_minor"],
+                "trip_cost_minor": assessment["trip_cost_minor"],
+                "shortfall_minor": assessment["shortfall_minor"],
+                "surplus_minor": assessment["surplus_minor"],
+                "covered": assessment["covered"],
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="depart")
+    def depart(self, request, pk=None):
+        """The departure gate: released manifest, published plan, covered cost."""
+        trip = self.get_object()
+        self._require_ops()
+        try:
+            trip = confirm_departure(trip)
+        except FreightError as exc:
+            return _err(exc)
+        record_audit(
+            actor=request.user,
+            organization=trip.organization,
+            action="goods.trip_departed",
+            entity_type="freight_trip",
+            entity_id=trip.pk,
+        )
+        return Response(FreightTripSerializer(trip).data)
+
+
+class ConsolidationPlanViewSet(
+    _OrgScopedViewSet,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+):
+    queryset = ConsolidationPlan.objects.all()
+    serializer_class = ConsolidationPlanSerializer
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=True, methods=["post"])
+    def validate(self, request, pk=None):
+        plan = self.get_object()
+        self._require_ops()
+        try:
+            plan = validate_plan(plan)
+        except FreightError as exc:
+            return _err(exc)
+        return Response(ConsolidationPlanSerializer(plan).data)
+
+    @action(detail=True, methods=["post"])
+    def publish(self, request, pk=None):
+        plan = self.get_object()
+        self._require_ops()
+        try:
+            plan = publish_plan(plan, reason=request.data.get("reason", ""))
+        except FreightError as exc:
+            return _err(exc)
+        return Response(ConsolidationPlanSerializer(plan).data)
+
+    @action(detail=True, methods=["post"])
+    def supersede(self, request, pk=None):
+        plan = self.get_object()
+        self._require_ops()
+        try:
+            new_plan = supersede_plan(
+                plan, reason=request.data.get("reason", ""), proposed_by=request.user
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            ConsolidationPlanSerializer(new_plan).data, status=status.HTTP_201_CREATED
+        )
+
+
+class BackhaulViewSet(_OrgScopedViewSet, mixins.ListModelMixin):
+    """Vehicles that could carry cargo home instead of running empty."""
+
+    queryset = FreightTrip.objects.none()
+    serializer_class = FreightTripSerializer
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        from apps.catalog.models import Place
+
+        origin = Place.objects.filter(pk=request.query_params.get("origin")).first()
+        destination = Place.objects.filter(
+            pk=request.query_params.get("destination")
+        ).first()
+        organization = _organization_for(request, None)
+        try:
+            opportunities = find_backhaul_opportunities(
+                organization=organization,
+                origin=origin,
+                destination=destination,
+                window_start=request.query_params.get("window_start"),
+                window_end=request.query_params.get("window_end"),
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            [
+                {
+                    "trip": str(item["trip"].pk),
+                    "vehicle": str(item["vehicle"].pk),
+                    "registration_number": item["vehicle"].registration_number,
+                    "free_weight_kg": str(item["free_weight_kg"]),
+                    "free_volume_m3": str(item["free_volume_m3"]),
+                    "available_from": item["available_from"],
+                    "must_depart_by": item["must_depart_by"],
+                }
+                for item in opportunities
+            ]
+        )
+
+
+class EmptyRunningReportViewSet(_OrgScopedViewSet, mixins.ListModelMixin):
+    """The blueprint's empty-running measure (p. 23)."""
+
+    queryset = FreightTrip.objects.none()
+    serializer_class = FreightTripSerializer
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        organization = _organization_for(request, None)
+        report = empty_running_report(
+            organization=organization, since=request.query_params.get("since")
+        )
+        return Response(
+            {
+                "since": report["since"],
+                "trips": report["trips"],
+                "measured_distance_km": str(report["measured_distance_km"]),
+                "empty_distance_km": str(report["empty_distance_km"]),
+                "empty_running_ratio": str(report["empty_running_ratio"]),
+            }
+        )
 
 class ManifestViewSet(
     _OrgScopedViewSet,

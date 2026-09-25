@@ -19,6 +19,7 @@ from apps.catalog.models import Quote, Service, build_quote
 from apps.goods.models import (
     CustodyEvent,
     FreightTrip,
+    LoadType,
     Manifest,
     ManifestLine,
     MeasurementBasis,
@@ -200,6 +201,7 @@ def create_shipment(
     sender=None,
     terms=None,
     packages=None,
+    load_type=None,
 ):
     """Book a consignment from an accepted quote.
 
@@ -225,6 +227,8 @@ def create_shipment(
     window_end = _aware(service_window_end, "service_window_end")
     if window_end <= window_start:
         raise GoodsError("The service window must end after it starts.")
+    if load_type is not None and load_type not in LoadType.values:
+        raise GoodsError("load_type must be a shared load or a full truckload.")
 
     measurements = dict(quote.request_payload or {})
     created = []
@@ -261,6 +265,7 @@ def create_shipment(
         measurement_snapshot=measurements,
         terms_snapshot=terms or _terms_from_quote(quote),
         agreed_total_minor=quote.total_minor,
+        load_type=load_type or LoadType.SHARED_LOAD,
         status=Shipment.Status.BOOKED,
     )
 
@@ -409,14 +414,12 @@ def cargo_capacity(trip):
     manifest = Manifest.objects.filter(trip=trip).first()
 
     committed_weight = ZERO
+    committed_volume = ZERO
     compartment_used = {c.pk: ZERO for c in vehicle.cargo_compartments.all()}
     if manifest is not None:
-        committed_weight = (
-            manifest.lines.filter(scan_state__in=_COMMITTED_SCAN_STATES).aggregate(
-                w=Sum("expected_weight_kg")
-            )["w"]
-            or ZERO
-        )
+        committed = manifest.lines.filter(scan_state__in=_COMMITTED_SCAN_STATES)
+        committed_weight = committed.aggregate(w=Sum("expected_weight_kg"))["w"] or ZERO
+        committed_volume = committed.aggregate(v=Sum("package__volume_m3"))["v"] or ZERO
         for line in manifest.lines.filter(scan_state__in=_COMMITTED_SCAN_STATES):
             if line.compartment_id is not None:
                 compartment_used[line.compartment_id] += line.expected_weight_kg
@@ -445,8 +448,9 @@ def cargo_capacity(trip):
         "capacity_weight_kg": capacity_weight,
         "capacity_volume_m3": capacity_volume,
         "committed_weight_kg": committed_weight,
+        "committed_volume_m3": committed_volume,
         "free_weight_kg": max(capacity_weight - committed_weight, ZERO),
-        "free_volume_m3": capacity_volume,
+        "free_volume_m3": max(capacity_volume - committed_volume, ZERO),
         "compartments": compartments,
     }
 

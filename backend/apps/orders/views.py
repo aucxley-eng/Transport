@@ -6,7 +6,6 @@ from rest_framework.response import Response
 from apps.accounts.models import organization_ids_for
 from apps.accounts.permissions import IsAuthenticated
 from apps.audit.models import record_audit
-from apps.catalog.models import Quote
 from apps.common.outbox import record_outbox
 from apps.orders.models import Order
 from apps.orders.serializers import OrderCreateSerializer, OrderSerializer

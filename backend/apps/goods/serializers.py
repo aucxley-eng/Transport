@@ -1,12 +1,15 @@
 from rest_framework import serializers
 
 from apps.goods.models import (
+    ConsolidationPlan,
+    ConsolidationStop,
     CustodyEvent,
     FreightTrip,
     Manifest,
     ManifestLine,
     MeasurementBasis,
     Package,
+    PlanShipment,
     Shipment,
     ShipmentEvidence,
     ShipmentException,
@@ -168,6 +171,7 @@ class ShipmentSerializer(serializers.ModelSerializer):
             "is_return",
             "return_of",
             "status",
+            "load_type",
             "open_exceptions",
             "created_at",
         ]
@@ -192,6 +196,75 @@ class ShipmentSerializer(serializers.ModelSerializer):
 
     def get_open_exceptions(self, obj):
         return obj.exceptions.filter(status=ShipmentException.Status.OPEN).count()
+
+
+class ConsolidationStopSerializer(serializers.ModelSerializer):
+    place_name = serializers.CharField(source="place.name", read_only=True)
+
+    class Meta:
+        model = ConsolidationStop
+        fields = [
+            "id",
+            "place",
+            "place_name",
+            "sequence",
+            "window_start",
+            "window_end",
+            "is_completed",
+        ]
+
+
+class PlanShipmentSerializer(serializers.ModelSerializer):
+    reference = serializers.CharField(source="shipment.reference", read_only=True)
+    load_type = serializers.CharField(source="shipment.load_type", read_only=True)
+
+    class Meta:
+        model = PlanShipment
+        fields = [
+            "id",
+            "shipment",
+            "reference",
+            "load_type",
+            "accepted",
+            "sequence",
+            "reason",
+            "revenue_minor",
+        ]
+
+
+class ConsolidationPlanSerializer(serializers.ModelSerializer):
+    stops = ConsolidationStopSerializer(many=True, read_only=True)
+    shipments = PlanShipmentSerializer(many=True, read_only=True)
+    accepted_count = serializers.SerializerMethodField()
+    committed_revenue_minor = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ConsolidationPlan
+        fields = [
+            "id",
+            "trip",
+            "version",
+            "status",
+            "explanation",
+            "stops",
+            "shipments",
+            "accepted_count",
+            "committed_revenue_minor",
+            "validated_at",
+            "published_at",
+            "supersedes",
+            "change_reason",
+            "proposed_by",
+            "created_at",
+        ]
+
+    def get_accepted_count(self, obj):
+        return obj.shipments.filter(accepted=True).count()
+
+    def get_committed_revenue_minor(self, obj):
+        return sum(
+            entry.revenue_minor for entry in obj.shipments.filter(accepted=True)
+        )
 
 
 class ManifestLineSerializer(serializers.ModelSerializer):

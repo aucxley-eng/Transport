@@ -8,7 +8,6 @@ from apps.accounts.models import Membership, Organization, Role, User
 from apps.catalog.models import Service, build_quote
 from apps.orders.models import Order
 from apps.payments.models import LedgerEntry, PaymentAttempt
-from apps.payments.provider import get_provider
 from apps.payments.services import (
     PaymentError,
     create_payment_attempt,

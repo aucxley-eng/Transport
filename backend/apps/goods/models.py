@@ -67,6 +67,15 @@ class MeasurementBasis(models.TextChoices):
     VEHICLE_CAPACITY = "vehicle_capacity", "Vehicle capacity"
 
 
+class LoadType(models.TextChoices):
+    """Full truckload is one shipper's consignment filling the vehicle;
+    shared-load is a consignment riding alongside others (blueprint 9: "For
+    full-truckload or shared-load freight")."""
+
+    FULL_TRUCKLOAD = "full_truckload", "Full truckload"
+    SHARED_LOAD = "shared_load", "Shared load"
+
+
 class Shipment(BaseModel):
     """One shipper's consignment from collection to destination."""
 
@@ -148,6 +157,13 @@ class Shipment(BaseModel):
 
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True
+    )
+
+    load_type = models.CharField(
+        max_length=16,
+        choices=LoadType.choices,
+        default=LoadType.SHARED_LOAD,
+        help_text="A full truckload travels alone; a shared load rides with others.",
     )
 
     objects = OrganizationScopedQuerySet.as_manager()
@@ -255,6 +271,28 @@ class FreightTrip(BaseModel):
     )
     planned_start = models.DateTimeField()
     planned_end = models.DateTimeField()
+    trip_cost_minor = models.PositiveBigIntegerField(
+        default=0,
+        help_text=(
+            "What it costs the operator to run this movement. Confirmed shipment "
+            "revenue must cover it before the trip may depart."
+        ),
+    )
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when the driver departs; a plan cannot be rewritten after this.",
+    )
+    distance_km = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        default=0,
+        help_text="Measured distance, the denominator of the empty-running measure.",
+    )
+    has_revenue_load = models.BooleanField(
+        default=False,
+        help_text="False while the measured distance is being run without a revenue load.",
+    )
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.PLANNED, db_index=True
     )
@@ -579,3 +617,138 @@ class ShipmentException(BaseModel):
 
     def __str__(self):
         return f"{self.kind}/{self.next_action} on {self.shipment.reference}"
+
+
+class ConsolidationPlan(BaseModel):
+    """A versioned proposal to share one vehicle between several consignments.
+
+    Blueprint 11: "a route optimizer may propose vehicle assignments and stop
+    order subject to time windows, capacity and working hours" and "save each
+    route plan version". Each proposal is a new immutable version; publishing
+    supersedes the previous published one rather than editing it.
+    """
+
+    class Status(models.TextChoices):
+        PROPOSED = "proposed", "Proposed"
+        VALIDATED = "validated", "Validated"
+        PUBLISHED = "published", "Published"
+        SUPERSEDED = "superseded", "Superseded"
+        REJECTED = "rejected", "Rejected"
+
+    organization = models.ForeignKey(
+        "accounts.Organization", on_delete=models.CASCADE, related_name="consolidation_plans"
+    )
+    trip = models.ForeignKey(
+        FreightTrip, on_delete=models.CASCADE, related_name="consolidation_plans"
+    )
+    version = models.PositiveSmallIntegerField()
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.PROPOSED, db_index=True
+    )
+    explanation = models.TextField(
+        blank=True,
+        help_text="Why an infeasible plan is infeasible; returned to dispatch, not hidden.",
+    )
+    validated_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    supersedes = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by"
+    )
+    change_reason = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Required when superseding a plan after publication.",
+    )
+    proposed_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["trip_id", "-version"]
+        constraints = [
+            models.UniqueConstraint(fields=["trip", "version"], name="uq_plan_trip_version"),
+        ]
+
+    def __str__(self):
+        return f"Plan v{self.version} trip={self.trip_id} ({self.status})"
+
+    @property
+    def is_published(self):
+        return self.status == self.Status.PUBLISHED
+
+    def admitted_shipments(self):
+        return self.shipments.filter(accepted=True).select_related("shipment")
+
+
+class ConsolidationStop(BaseModel):
+    """One stop in a plan's proposed order, with the window it must be served in."""
+
+    organization = models.ForeignKey(
+        "accounts.Organization", on_delete=models.CASCADE, related_name="consolidation_stops"
+    )
+    plan = models.ForeignKey(
+        ConsolidationPlan, on_delete=models.CASCADE, related_name="stops"
+    )
+    place = models.ForeignKey(Place, on_delete=models.PROTECT, related_name="+")
+    sequence = models.PositiveSmallIntegerField()
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    is_completed = models.BooleanField(
+        default=False,
+        help_text="Completed stops are preserved once the driver has begun the route.",
+    )
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["plan_id", "sequence"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plan", "sequence"], name="uq_plan_stop_sequence"
+            ),
+        ]
+
+    def __str__(self):
+        return f"Stop {self.sequence}: {self.place.name}"
+
+
+class PlanShipment(BaseModel):
+    """Whether a consignment rides on a plan, and why.
+
+    A rejected consignment keeps its reason, so dispatch can see the unassigned
+    work and its cause rather than an empty plan.
+    """
+
+    organization = models.ForeignKey(
+        "accounts.Organization", on_delete=models.CASCADE, related_name="plan_shipments"
+    )
+    plan = models.ForeignKey(
+        ConsolidationPlan, on_delete=models.CASCADE, related_name="shipments"
+    )
+    shipment = models.ForeignKey(
+        Shipment, on_delete=models.CASCADE, related_name="plan_entries"
+    )
+    accepted = models.BooleanField(default=False)
+    sequence = models.PositiveSmallIntegerField(null=True, blank=True)
+    reason = models.CharField(
+        max_length=255, blank=True, help_text="Why it was accepted or rejected."
+    )
+    revenue_minor = models.PositiveBigIntegerField(
+        default=0, help_text="The shipment's own frozen quote total; never apportioned."
+    )
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["plan_id", "sequence", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plan", "shipment"], name="uq_plan_shipment"
+            ),
+        ]
+
+    def __str__(self):
+        state = "accepted" if self.accepted else f"rejected ({self.reason})"
+        return f"{self.shipment.reference}: {state}"

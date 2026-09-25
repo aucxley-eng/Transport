@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and Envelope 3A (freight booking, manifest and custody chain) are implemented and green:
+Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and freight Envelopes 3A and 3B (booking and custody, then consolidated shared load with the coverage floor and backhaul) are implemented and green:
 
 | Component | State |
 |---|---|
 | `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 216 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns. |
-| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelope 3A of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, consolidated shared-load and backhaul (3B), mid-route insertion (3C), returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
+| Tests | 252 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. |
+| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3B of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, mid-route insertion (3C), returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
 
 ## Repository layout
 
@@ -44,7 +44,7 @@ Transport/
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
 3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(implemented: scheduled booking core, Envelope 2A on-demand rides, Envelope 2B corporate shuttles, Envelope 2C charter/hire)*
-4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Courier/parcel, warehouse inventory, consolidated shared-load and backhaul (3B) and mid-route insertion (3C) remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md))*
+4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Courier/parcel, warehouse inventory and mid-route insertion (3C) remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md) and [`docs/phase3b-scope.md`](./docs/phase3b-scope.md))*
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
 
@@ -199,6 +199,28 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **A photo alone does not prove delivery**: delivery evidence requires recipient verification (OTP, signature, or a name with an identity check). Collection and delivery evidence are separate rows.
 - **Partial delivery stays visible at package level**, and failed attempts carry an explicit next action: retry, hold at branch, return or claim.
 - **A return is a linked reverse shipment** with its own legs, packages and custody history, leaving the original consignment and its chain intact.
+
+### Envelope 3B API surface (consolidated shared load, coverage floor, backhaul)
+
+| Area | Endpoints |
+|---|---|
+| Consolidation | `POST /api/v1/freight-trips/{id}/consolidation/propose/`, `GET /api/v1/freight-trips/{id}/consolidation/` |
+| Plan versions | `POST /api/v1/consolidation-plans/{id}/validate/`, `/{id}/publish/`, `/{id}/supersede/` |
+| Departure | `GET /api/v1/freight-trips/{id}/coverage/`, `POST /api/v1/freight-trips/{id}/depart/` |
+| Backhaul | `GET /api/v1/backhaul/opportunities/` |
+| Empty running | `GET /api/v1/reports/empty-running/` |
+
+### Envelope 3B invariants enforced
+
+- **Each shipper keeps its own frozen quote**: sharing a truck never moves anyone's price. See [`docs/phase3b-scope.md`](./docs/phase3b-scope.md).
+- **The coverage floor is the product decision**: a trip departs only when the distinct shipments physically on its released manifest together cover `trip_cost_minor`. A shortfall blocks departure and is reported; nothing is apportioned or repriced.
+- **The truck carries what the plan promised**: departure also requires a released manifest that matches the published plan, so a manifest or plan changed after sign-off cannot slip through.
+- **A full truckload travels alone**: offering one to a consolidation keeps the shared consignments off, and validation refuses to publish a plan that smuggles a shared load in behind a full truckload.
+- **Assignment is rule-based and transparent**: consignments are ordered by service window, then admitted only if they fit the vehicle's remaining weight, volume and the driver's working day. Everything that cannot be carried is recorded with its reason, never dropped.
+- **Infeasibility is explained**: a trip that can carry nothing returns the reasons to dispatch rather than an empty plan.
+- **Plan versions are saved, not edited**: every proposal is a new version pointing at the one it supersedes, publication requires a prior validation pass, and replacing a published plan demands a reason.
+- **A departed trip is frozen**: once the driver starts, no replanning and no superseding; completed stops stay on record.
+- **Empty running is the blueprint's measure**: distance without the defined revenue load divided by measured distance, over completed trips.
 
 ## Environment variables
 

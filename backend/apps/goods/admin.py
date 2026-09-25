@@ -1,11 +1,14 @@
 from django.contrib import admin
 
 from apps.goods.models import (
+    ConsolidationPlan,
+    ConsolidationStop,
     CustodyEvent,
     FreightTrip,
     Manifest,
     ManifestLine,
     Package,
+    PlanShipment,
     Shipment,
     ShipmentEvidence,
     ShipmentException,
@@ -15,8 +18,15 @@ from apps.goods.models import (
 
 @admin.register(Shipment)
 class ShipmentAdmin(admin.ModelAdmin):
-    list_display = ["reference", "organization", "sender_name", "status", "agreed_total_minor"]
-    list_filter = ["status", "is_return", "measurement_basis", "organization"]
+    list_display = [
+        "reference",
+        "organization",
+        "sender_name",
+        "status",
+        "load_type",
+        "agreed_total_minor",
+    ]
+    list_filter = ["status", "is_return", "load_type", "measurement_basis", "organization"]
     search_fields = ["reference", "sender_name", "recipient_name"]
 
 
@@ -84,3 +94,23 @@ class ShipmentEvidenceAdmin(admin.ModelAdmin):
 class ShipmentExceptionAdmin(admin.ModelAdmin):
     list_display = ["shipment", "kind", "next_action", "status", "created_at"]
     list_filter = ["kind", "next_action", "status", "organization"]
+
+
+@admin.register(ConsolidationPlan)
+class ConsolidationPlanAdmin(admin.ModelAdmin):
+    list_display = ["trip", "version", "status", "change_reason", "published_at"]
+    list_filter = ["status", "organization"]
+    search_fields = ["trip__reference"]
+
+
+@admin.register(ConsolidationStop)
+class ConsolidationStopAdmin(admin.ModelAdmin):
+    list_display = ["plan", "sequence", "place", "window_start", "window_end", "is_completed"]
+    list_filter = ["organization"]
+
+
+@admin.register(PlanShipment)
+class PlanShipmentAdmin(admin.ModelAdmin):
+    list_display = ["plan", "sequence", "shipment", "accepted", "reason", "revenue_minor"]
+    list_filter = ["accepted", "organization"]
+    search_fields = ["shipment__reference"]

@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import Membership, Organization, User, organization_ids_for
+from apps.accounts.models import Membership, Organization, organization_ids_for
 from apps.accounts.permissions import IsPlatformAdmin
 from apps.accounts.serializers import (
     MembershipCreateSerializer,
