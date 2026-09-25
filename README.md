@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation), the core of Phase 2 (scheduled passenger booking) and Envelope 2A (on-demand rides and dispatch) are implemented and green:
+Phase 1 (shared foundation), the core of Phase 2 (scheduled passenger booking), Envelope 2A (on-demand rides and dispatch) and Envelope 2B (corporate travel and recurring shuttles) are implemented and green:
 
 | Component | State |
 |---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 9 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `payments` (M-PESA adapter, ledger). |
+| `backend/` | Django + DRF API running on `/api/v1/`. 10 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 71 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy. |
-| Blueprint | Full architecture in the PDF; Phase 1, Phase 2 scheduled-booking core and Envelope 2A on-demand rides delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md) and [`docs/phase2b-scope.md`](./docs/phase2b-scope.md)). Corporate shuttles, charter/hire and goods are next. |
+| Tests | 100 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttle generation/roster/departure. |
+| Blueprint | Full architecture in the PDF; Phase 1, Phase 2 scheduled-booking core, Envelope 2A on-demand rides and Envelope 2B corporate shuttles delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md), [`docs/phase2b-scope.md`](./docs/phase2b-scope.md)). Charter/hire and the goods/freight track are next (see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md)). |
 
 ## Repository layout
 
@@ -43,7 +43,7 @@ Transport/
 
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
-3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core and Envelope 2A on-demand rides implemented; corporate shuttles/charter next — see [`docs/phase2-scope.md`](./docs/phase2-scope.md) and [`docs/phase2b-scope.md`](./docs/phase2b-scope.md))*
+3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core, Envelope 2A on-demand rides and Envelope 2B corporate shuttles implemented; charter/hire next)*
 4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns.
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
@@ -130,6 +130,26 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Cancellations and no-shows** record reason, evidence and the applicable fee.
 - **Failed matching** gives the customer an explicit retry / scheduled alternative / cancel outcome instead of silence.
 - **Contact privacy**: a driver sees passenger contact details only for trips assigned to them.
+
+### Envelope 2B API surface (corporate travel and shuttles)
+
+| Area | Endpoints |
+|---|---|
+| Policy | `/api/v1/corporate/policy/` — permitted services, approval threshold, budget period |
+| Cost centres | `/api/v1/corporate/cost-centers/` — budget, derived spend and remaining |
+| Employees | `/api/v1/corporate/members/` (+ `/{id}/deactivate/`) |
+| Travel requests | `/api/v1/corporate/requests/` (+ `/{id}/approve/`, `/{id}/reject/`) |
+| Shuttles | `/api/v1/corporate/shuttle-templates/` (+ `/{id}/generate/`), `/api/v1/corporate/shuttle-runs/{id}/roster/`, `/unroster/` |
+
+### Envelope 2B invariants enforced
+
+- **Company-defined rules**: permitted services, approval threshold, cost centres and budgets gate every request; a request over budget is refused rather than silently overspending.
+- **Approval before dispatch**: requests at or above the threshold stay `pending_approval` until a corporate travel manager decides; below-threshold requests auto-approve. Self-approval is refused, and employees get 403 on the decision endpoints.
+- **Budgets are derived from history**, not a mutable counter, so spend cannot drift and a leaver cannot change what a cost centre already committed.
+- **Schedule template → dated departures**: a template generates one real `booking.Departure` per matching weekday, with segments built so the seats are actually bookable. Generation is idempotent — a second run over the same range creates nothing.
+- **Roster respects capacity** and rejects ineligible, duplicate or cross-company members.
+- **Departing employee loses future access without losing history**: deactivation blocks new requests and cancels not-yet-departed roster entries, while past rosters, travel requests and orders are retained as evidence and invoices.
+- **Corporate travel composes on the existing seat inventory** rather than duplicating it.
 
 ## Environment variables
 
