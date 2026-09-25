@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation), the core of Phase 2 (scheduled passenger booking), Envelope 2A (on-demand rides and dispatch) and Envelope 2B (corporate travel and recurring shuttles) are implemented and green:
+Phase 1 (shared foundation) and all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) are implemented and green:
 
 | Component | State |
 |---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 10 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `payments` (M-PESA adapter, ledger). |
+| `backend/` | Django + DRF API running on `/api/v1/`. 11 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 100 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttle generation/roster/departure. |
-| Blueprint | Full architecture in the PDF; Phase 1, Phase 2 scheduled-booking core, Envelope 2A on-demand rides and Envelope 2B corporate shuttles delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md), [`docs/phase2b-scope.md`](./docs/phase2b-scope.md)). Charter/hire and the goods/freight track are next (see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md)). |
+| Tests | 133 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras. |
+| Blueprint | Full architecture in the PDF. Phase 1 and Phase 2 are delivered, completing §7 and §8 (scheduled booking, on-demand rides, corporate travel, recurring shuttles, charter and vehicle hire). The goods/freight track (§9–10) is next — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md). |
 
 ## Repository layout
 
