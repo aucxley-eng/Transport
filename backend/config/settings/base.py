@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.rides",
     "apps.corporate",
     "apps.charter",
+    "apps.goods",
     "apps.payments",
 ]
 

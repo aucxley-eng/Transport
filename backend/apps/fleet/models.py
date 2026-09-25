@@ -152,3 +152,36 @@ class Driver(BaseModel):
 
     def is_dispatchable(self):
         return self.status == self.Status.APPROVED
+
+
+class CargoCompartment(BaseModel):
+    """A discrete load space on a vehicle with its own limits (blueprint 11:
+    "Model seats, baggage allowance, cargo weight, volume and compartment
+    restrictions"). Whole-vehicle cargo limits are the sum of the compartments;
+    a package is admitted only if a single compartment can take it."""
+
+    organization = models.ForeignKey(
+        "accounts.Organization", on_delete=models.CASCADE, related_name="cargo_compartments"
+    )
+    vehicle = models.ForeignKey(
+        Vehicle, on_delete=models.CASCADE, related_name="cargo_compartments"
+    )
+    name = models.CharField(max_length=60)
+    max_weight_kg = models.PositiveIntegerField(default=0)
+    max_volume_m3 = models.FloatField(default=0.0)
+    allows_stackable = models.BooleanField(default=True)
+    accepts_fragile = models.BooleanField(default=True)
+    accepts_hazardous = models.BooleanField(default=False)
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["vehicle_id", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["vehicle", "name"], name="uq_compartment_vehicle_name"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.vehicle.registration_number} / {self.name}"

@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation) and all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) are implemented and green:
+Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and Envelope 3A (freight booking, manifest and custody chain) are implemented and green:
 
 | Component | State |
 |---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 11 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `payments` (M-PESA adapter, ledger). |
+| `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 133 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras. |
-| Blueprint | Full architecture in the PDF. Phase 1 and Phase 2 are delivered, completing §7 and §8 (scheduled booking, on-demand rides, corporate travel, recurring shuttles, charter and vehicle hire). The goods/freight track (§9–10) is next — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md). |
+| Tests | 216 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns. |
+| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelope 3A of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, consolidated shared-load and backhaul (3B), mid-route insertion (3C), returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
 
 ## Repository layout
 
@@ -24,7 +24,7 @@ Transport/
 ├── .env.example                                     # Django environment template
 ├── backend/                                         # API server (Django + DRF)
 │   ├── manage.py
-│   ├── config/settings/  (base, development, production)
+│   ├── config/settings/  (base, development, production, test)
 │   └── requirements/     (base, development, production)
 ├── frontend/                                        # Client applications
 │   └── src/  (api, context, pages, components, utils)
@@ -43,8 +43,8 @@ Transport/
 
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
-3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core, Envelope 2A on-demand rides and Envelope 2B corporate shuttles implemented; charter/hire next)*
-4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns.
+3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(implemented: scheduled booking core, Envelope 2A on-demand rides, Envelope 2B corporate shuttles, Envelope 2C charter/hire)*
+4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Courier/parcel, warehouse inventory, consolidated shared-load and backhaul (3B) and mid-route insertion (3C) remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md))*
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
 
@@ -64,6 +64,14 @@ python manage.py runserver
 ```
 
 Dev settings are active by default (`config.settings.development`). SQLite is used unless `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` are set in the environment.
+
+Run the test suite with the fast-hasher settings module:
+
+```bash
+python manage.py test --settings=config.settings.test
+```
+
+`config.settings.test` differs from development only in using a cheap password hasher; every test builds organizations, staff, drivers and senders, and PBKDF2 made the suite take minutes rather than seconds.
 
 API docs are served at `/api/docs/` (DRF Spectacular).
 
@@ -150,6 +158,47 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Roster respects capacity** and rejects ineligible, duplicate or cross-company members.
 - **Departing employee loses future access without losing history**: deactivation blocks new requests and cancels not-yet-departed roster entries, while past rosters, travel requests and orders are retained as evidence and invoices.
 - **Corporate travel composes on the existing seat inventory** rather than duplicating it.
+
+### Envelope 2C API surface (charter and vehicle hire)
+
+| Area | Endpoints |
+|---|---|
+| Hire requests | `/api/v1/charter/requests/` (+ `/{id}/quote/`, `/confirm/`, `/deposit/`, `/extras/`, `/complete/`, `/cancel/`) |
+| Availability | `GET /api/v1/charter/availability/?start_at=&end_at=&vehicle_class=` |
+| Reservations | `/api/v1/charter/reservations/` |
+
+### Envelope 2C invariants enforced
+
+- **The hire request states the terms**: dates, itinerary, vehicle class, passenger count and included hours or distance — one of hours/distance is required.
+- **Availability blocks a wider interval than the hire**: travel-to-pickup and turnaround are added around the window, so a crew cannot be promised to two hires that touch.
+- **Both vehicle and driver are held** for the whole interval; a driver without verified, in-date documents is not offered.
+- **Quote before confirm**: an unquoted request cannot be confirmed, and the vehicle must match the class, carry the passengers and be active.
+- **Deposits accumulate** against the hire and are only accepted once it is confirmed.
+- **Only permitted extras finalize** into the total; a non-permitted extra stays on record and is never charged.
+- **Cancelling releases the reservation**, returning the interval to availability.
+
+### Envelope 3A API surface (freight booking, manifest and custody)
+
+| Area | Endpoints |
+|---|---|
+| Shipments | `POST /api/v1/shipments/quote/`, `POST /api/v1/shipments/`, `/{id}/custody/`, `/{id}/packages/`, `/{id}/evidence/`, `/{id}/exceptions/`, `/{id}/return/` |
+| Packages | `/api/v1/packages/` with `POST /api/v1/packages/{id}/custody/` (append-only) |
+| Trips | `/api/v1/freight-trips/` — with the remaining cargo capacity and per-compartment allowance |
+| Manifests | `POST /api/v1/manifests/build/`, `/{id}/reconcile/`, `/{id}/release/` |
+| Exceptions | `/api/v1/shipment-exceptions/{id}/resolve/` |
+
+### Envelope 3A invariants enforced
+
+- **The accepted quote and its basis are frozen onto the shipment**: weight, volume, declared value and measurement basis are snapshotted, and the agreed terms survive a later tariff change.
+- **Expired or unaccepted quotes cannot be booked.**
+- **Cargo capacity is independent of passenger capacity**: a 40-seat bus with no cargo allowance cannot carry freight, and seats are never read as kilograms. Cargo is its own ledger of weight, volume and compartments.
+- **Compartment restrictions are enforced**: a fragile or hazardous package will not be placed in a compartment that does not accept it, and no compartment is loaded past its own limit.
+- **The manifest is authoritative**: loading scans must reconcile against it before release, and a missing, unlisted or damaged line raises an exception instead of being silently accepted.
+- **Release is gated**: an unreconciled manifest, an open discrepancy or an unresolved exception blocks the vehicle.
+- **Custody history is append-only**, with device event time and server receipt time both recorded, so offline capture stays distinguishable. Corrections are new events that name the event they correct and must give a reason; there is no update or delete route at all, and branch staff cannot write custody.
+- **A photo alone does not prove delivery**: delivery evidence requires recipient verification (OTP, signature, or a name with an identity check). Collection and delivery evidence are separate rows.
+- **Partial delivery stays visible at package level**, and failed attempts carry an explicit next action: retry, hold at branch, return or claim.
+- **A return is a linked reverse shipment** with its own legs, packages and custody history, leaving the original consignment and its chain intact.
 
 ## Environment variables
 
