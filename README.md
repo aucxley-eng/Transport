@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation) and the core of Phase 2 (scheduled passenger booking) are implemented and green:
+Phase 1 (shared foundation), the core of Phase 2 (scheduled passenger booking) and Envelope 2A (on-demand rides and dispatch) are implemented and green:
 
 | Component | State |
 |---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 8 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `payments` (M-PESA adapter, ledger). |
+| `backend/` | Django + DRF API running on `/api/v1/`. 9 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 48 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding. |
-| Blueprint | Full architecture in the PDF; Phase 1 delivered, Phase 2 scheduled-booking core delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md)). On-demand rides, corporate shuttles and goods are next. |
+| Tests | 71 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy. |
+| Blueprint | Full architecture in the PDF; Phase 1, Phase 2 scheduled-booking core and Envelope 2A on-demand rides delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md) and [`docs/phase2b-scope.md`](./docs/phase2b-scope.md)). Corporate shuttles, charter/hire and goods are next. |
 
 ## Repository layout
 
@@ -43,7 +43,7 @@ Transport/
 
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
-3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core implemented; rides/corporate/charter next — see [`docs/phase2-scope.md`](./docs/phase2-scope.md))*
+3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core and Envelope 2A on-demand rides implemented; corporate shuttles/charter next — see [`docs/phase2-scope.md`](./docs/phase2-scope.md) and [`docs/phase2b-scope.md`](./docs/phase2b-scope.md))*
 4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns.
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
@@ -110,6 +110,26 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Boarding checks** departure, ticket state and previous boarding (duplicate board rejected).
 - **Vehicle substitution with fewer seats** creates a reassignment exception requiring customer communication — never a silent removal.
 - **Operator isolation** on route/departure writes.
+
+### Envelope 2A API surface (on-demand rides and dispatch)
+
+| Area | Endpoints |
+|---|---|
+| Rides | `/api/v1/rides/` (`POST` request a ride, `/{id}/send-offers/` dispatch, `/{id}/fail/` failed matching) |
+| Offers | `/api/v1/offers/` (driver-scoped, with `/{id}/accept/` and `/{id}/decline/`) |
+| Trips | `/api/v1/trips/{id}/` with `arrive/`, `verify_pin/`, `complete/`, `change_destination/`, `accept_destination/`, `incident/` |
+| Shifts / zones | `/api/v1/driver/shifts/`, `/api/v1/service-zones/` |
+
+### Envelope 2A invariants enforced
+
+- **Dispatch filters** approved drivers by availability (open shift), vehicle class, service zone **and** document status — an expired or unverified PSV licence removes a driver from the pool immediately.
+- **Time-limited offers** to every eligible driver; `expire_offers` sweeps lapsed offers.
+- **First valid acceptance wins** through an atomic, row-locked assignment; later or expired acceptances are rejected and the competing offers close.
+- **Offer acceptance and trip start are separate events**: accepting creates a trip in `assigned` state, and only a verified trip PIN starts it.
+- **Destination changes** require a revised estimate and explicit customer acceptance before the destination is updated.
+- **Cancellations and no-shows** record reason, evidence and the applicable fee.
+- **Failed matching** gives the customer an explicit retry / scheduled alternative / cancel outcome instead of silence.
+- **Contact privacy**: a driver sees passenger contact details only for trips assigned to them.
 
 ## Environment variables
 

@@ -123,6 +123,14 @@ class Driver(BaseModel):
     )
     license_number = models.CharField(max_length=40, blank=True)
     license_expires_on = models.DateField(null=True, blank=True)
+    current_vehicle = models.ForeignKey(
+        "fleet.Vehicle",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assigned_drivers",
+        help_text="Vehicle the driver is currently assigned to; drives dispatch eligibility by vehicle class.",
+    )
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True
     )
