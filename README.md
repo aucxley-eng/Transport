@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation) is implemented and green:
+Phase 1 (shared foundation) and the core of Phase 2 (scheduled passenger booking) are implemented and green:
 
 | Component | State |
 |---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 7 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `payments` (M-PESA adapter, ledger). |
+| `backend/` | Django + DRF API running on `/api/v1/`. 8 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet`, `catalog` (pricing/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 10 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity. |
-| Blueprint | Full architecture defined in the PDF; Phase 1 foundation delivered, Phase 2 (passenger services) is next. |
+| Tests | 48 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding. |
+| Blueprint | Full architecture in the PDF; Phase 1 delivered, Phase 2 scheduled-booking core delivered (see [`docs/phase2-scope.md`](./docs/phase2-scope.md)). On-demand rides, corporate shuttles and goods are next. |
 
 ## Repository layout
 
@@ -43,7 +43,7 @@ Transport/
 
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
-3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(next)*
+3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(scheduled booking core implemented; rides/corporate/charter next — see [`docs/phase2-scope.md`](./docs/phase2-scope.md))*
 4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns.
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
@@ -89,6 +89,27 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Callback dedup**: a repeated provider webhook cannot create a second balance effect.
 - **Transactional outbox**: `publish_outbox --loop` relays committed events to subscribers.
 - **Append-only ledger** with balanced double entries; **append-only audit trail** for every write.
+
+### Phase 2 API surface (scheduled passenger booking)
+
+| Area | Endpoints |
+|---|---|
+| Search | `GET /api/v1/booking/search/?from=&to=&date=` – available departures + per-leg seats |
+| Hold | `POST /api/v1/booking/holds/` – atomic timed seat hold (one or many) |
+| Checkout | `POST /api/v1/booking/checkout/` – held seats → pay-ready order |
+| Boarding | `POST /api/v1/booking/board/` – scan ticket, mark boarded |
+| Routes | `/api/v1/routes/`, `/api/v1/departures/` (with `/departures/{id}/substitute_vehicle/`) |
+| Tickets | `/api/v1/tickets/` |
+
+### Phase 2 invariants enforced
+
+- **Segment-level seat inventory**: a seat is held against a departure *and* the occupied route segments, so Nairobi→Nakuru and Nakuru→Eldoret can reuse the same seat while overlapping reservations are rejected.
+- **Atomic timed holds**: seat acquisition locks the departure row inside a transaction, so simultaneous clicks cannot both win the same seat.
+- **Group bookings acquire together** or return a clear partial-availability response before payment.
+- **Ticket issued only on successful payment**, in the same transaction as the ledger postings; a hold that lapsed first yields no ticket and queues a rebook/refund exception instead of silently keeping the fare.
+- **Boarding checks** departure, ticket state and previous boarding (duplicate board rejected).
+- **Vehicle substitution with fewer seats** creates a reassignment exception requiring customer communication — never a silent removal.
+- **Operator isolation** on route/departure writes.
 
 ## Environment variables
 

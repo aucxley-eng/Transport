@@ -6,6 +6,7 @@ import uuid
 from django.db import transaction
 
 from apps.audit.models import record_audit
+from apps.common.outbox import record_outbox
 from apps.orders.models import Order
 from apps.payments.models import LedgerEntry, PaymentAttempt
 from apps.payments.provider import (
@@ -154,6 +155,11 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
         attempt.save(update_fields=["state", "provider_payload", "result_received", "updated_at"])
         if new_state == PaymentAttempt.State.SUCCESS:
             _post_collection(attempt)
+            # Seat availability and payment success are evaluated together
+            # before a confirmed ticket is issued (blueprint 7). This runs in
+            # the same transaction as the ledger postings: the ticket exists if
+            # and only if the collection committed.
+            _issue_booking_tickets(attempt)
         record_audit(
             actor=actor,
             organization=attempt.organization,
@@ -200,3 +206,74 @@ def _post_collection(attempt):
         reference=str(attempt.provider_reference or ""),
         correlation_id=correlation,
     )
+
+
+def _issue_booking_tickets(attempt):
+    """Turn a paid booking order's held seats into confirmed tickets.
+
+    Runs inside the payment callback's transaction, so the ticket is committed
+    exactly when the collection is (blueprint 7). If a hold lapsed before the
+    callback settled, no ticket is issued; instead a refund/rebook exception is
+    queued on the outbox so the collected funds are never silently kept with no
+    seat (blueprint 7: "Expired or reassigned hold -> Rebook or refund
+    exception")."""
+    from apps.booking.services import issue_ticket_for_order
+
+    order = attempt.order
+    if order is None:
+        return []
+
+    try:
+        tickets, expired_holds = issue_ticket_for_order(order)
+    except Exception:  # never let booking break the collection record
+        record_audit(
+            organization=attempt.organization,
+            action="payment.ticket_issue_failed",
+            entity_type="order",
+            entity_id=order.pk,
+            reason="Seat hold could not be converted to a ticket.",
+        )
+        return []
+
+    for ticket in tickets:
+        record_outbox(
+            event_type="booking.ticket_issued",
+            aggregate_type="ticket",
+            aggregate_id=ticket.pk,
+            organization_id=attempt.organization_id,
+            payload={
+                "ticket_id": str(ticket.pk),
+                "reference": ticket.reference,
+                "departure_id": str(ticket.departure_id),
+                "seat_number": ticket.seat_number,
+                "order_id": str(order.pk),
+            },
+        )
+        record_audit(
+            organization=attempt.organization,
+            action="booking.ticket_issued",
+            entity_type="ticket",
+            entity_id=ticket.pk,
+            new_value={"reference": ticket.reference, "seat_number": ticket.seat_number},
+        )
+
+    for hold in expired_holds:
+        record_outbox(
+            event_type="booking.rebook_or_refund_required",
+            aggregate_type="seat_hold",
+            aggregate_id=hold.pk,
+            organization_id=attempt.organization_id,
+            payload={
+                "hold_id": str(hold.pk),
+                "order_id": str(order.pk),
+                "reason": "Seat hold expired before payment settled.",
+            },
+        )
+        record_audit(
+            organization=attempt.organization,
+            action="booking.hold_expired_after_payment",
+            entity_type="seat_hold",
+            entity_id=hold.pk,
+            reason="Seat hold expired before payment settled; refund/rebook required.",
+        )
+    return tickets
