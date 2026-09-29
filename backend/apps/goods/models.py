@@ -369,6 +369,13 @@ class Manifest(BaseModel):
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.DRAFT, db_index=True
     )
+    version = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="A mid-route pickup amends the manifest by publishing a new version.",
+    )
+    supersedes = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT, related_name="superseded_by"
+    )
     built_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
     )
@@ -383,7 +390,7 @@ class Manifest(BaseModel):
     class Meta:
         ordering = ["-created_at"]
         constraints = [
-            models.UniqueConstraint(fields=["trip"], name="uq_manifest_per_trip"),
+            models.UniqueConstraint(fields=["trip", "version"], name="uq_manifest_trip_version"),
         ]
 
     def __str__(self):
@@ -699,6 +706,11 @@ class ConsolidationStop(BaseModel):
         default=False,
         help_text="Completed stops are preserved once the driver has begun the route.",
     )
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the driver served this stop; the fact is immutable.",
+    )
 
     objects = OrganizationScopedQuerySet.as_manager()
 
@@ -752,3 +764,71 @@ class PlanShipment(BaseModel):
     def __str__(self):
         state = "accepted" if self.accepted else f"rejected ({self.reason})"
         return f"{self.shipment.reference}: {state}"
+
+
+class InsertionRequest(BaseModel):
+    """A consignment offered to the driver of a truck already on the road.
+
+    Blueprint 11: "Once a driver begins a route, preserve completed stops and
+    communicate any remaining-stop changes clearly", and "use a transaction and
+    version check when accepting an offer ... a previously valid availability
+    screen is not proof". The request records what the dispatcher believed was
+    still possible, so acceptance re-checks it instead of trusting it.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+        EXPIRED = "expired", "Expired"
+        REFUSED = "refused", "Refused by the rules"
+
+    organization = models.ForeignKey(
+        "accounts.Organization", on_delete=models.CASCADE, related_name="insertion_requests"
+    )
+    trip = models.ForeignKey(
+        FreightTrip, on_delete=models.CASCADE, related_name="insertion_requests"
+    )
+    shipment = models.ForeignKey(
+        Shipment, on_delete=models.CASCADE, related_name="insertion_requests"
+    )
+    requested_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    reason = models.CharField(max_length=255, blank=True)
+    tolerance_minutes = models.PositiveSmallIntegerField(
+        default=0, help_text="The operator's delay tolerance when the request was made."
+    )
+    free_weight_kg = models.DecimalField(
+        max_digits=10, decimal_places=3, default=0, help_text="Free weight when offered."
+    )
+    plan_version = models.PositiveSmallIntegerField(
+        default=0, help_text="The published plan version the request was measured against."
+    )
+    decided_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    resulting_plan = models.ForeignKey(
+        ConsolidationPlan,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="insertion_requests",
+    )
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["trip", "shipment"], name="uq_insertion_trip_shipment"
+            ),
+        ]
+
+    def __str__(self):
+        return f"Insertion {self.shipment.reference} on trip {self.trip_id} ({self.status})"

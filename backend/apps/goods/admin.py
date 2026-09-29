@@ -5,6 +5,7 @@ from apps.goods.models import (
     ConsolidationStop,
     CustodyEvent,
     FreightTrip,
+    InsertionRequest,
     Manifest,
     ManifestLine,
     Package,
@@ -51,7 +52,9 @@ class ShipmentLegAdmin(admin.ModelAdmin):
 
 @admin.register(Manifest)
 class ManifestAdmin(admin.ModelAdmin):
-    list_display = ["__str__", "trip", "status", "reconciled_at", "released_at"]
+    # A mid-route pickup amends the manifest by publishing a new version, so the
+    # released one stays on record; version and supersedes are what say so.
+    list_display = ["__str__", "trip", "version", "status", "reconciled_at", "released_at"]
     list_filter = ["status", "organization"]
 
 
@@ -105,8 +108,32 @@ class ConsolidationPlanAdmin(admin.ModelAdmin):
 
 @admin.register(ConsolidationStop)
 class ConsolidationStopAdmin(admin.ModelAdmin):
-    list_display = ["plan", "sequence", "place", "window_start", "window_end", "is_completed"]
-    list_filter = ["organization"]
+    list_display = [
+        "plan",
+        "sequence",
+        "place",
+        "window_start",
+        "window_end",
+        "is_completed",
+        "completed_at",
+    ]
+    list_filter = ["is_completed", "organization"]
+
+
+@admin.register(InsertionRequest)
+class InsertionRequestAdmin(admin.ModelAdmin):
+    list_display = [
+        "trip",
+        "shipment",
+        "status",
+        "tolerance_minutes",
+        "plan_version",
+        "requested_by",
+        "decided_by",
+        "decided_at",
+    ]
+    list_filter = ["status", "organization"]
+    search_fields = ["shipment__reference", "trip__reference"]
 
 
 @admin.register(PlanShipment)

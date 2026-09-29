@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from apps.accounts.phones import normalize_phone
@@ -105,6 +106,14 @@ class Organization(BaseModel):
     address = models.CharField(max_length=255, blank=True)
     contact_phone = models.CharField(max_length=16, blank=True)
     is_active = models.BooleanField(default=True)
+    insertion_grace_minutes = models.PositiveSmallIntegerField(
+        default=30,
+        validators=[MinValueValidator(0), MaxValueValidator(240)],
+        help_text=(
+            "How far a mid-route insertion may push an already-promised stop "
+            "before the platform refuses it (blueprint 11)."
+        ),
+    )
 
     class Meta:
         ordering = ["name"]

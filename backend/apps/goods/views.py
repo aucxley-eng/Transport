@@ -27,10 +27,20 @@ from apps.goods.consolidation import (
     supersede_plan,
     validate_plan,
 )
+from apps.goods.insertion import (
+    accept_insertion,
+    amend_manifest,
+    complete_stop as mark_stop_complete,
+    decline_insertion,
+    insert_consignment,
+    request_insertion,
+    route_state,
+)
 from apps.goods.models import (
     ConsolidationPlan,
     CustodyEvent,
     FreightTrip,
+    InsertionRequest,
     Manifest,
     Package,
     Shipment,
@@ -38,8 +48,10 @@ from apps.goods.models import (
 )
 from apps.goods.serializers import (
     ConsolidationPlanSerializer,
+    ConsolidationStopSerializer,
     CustodyEventSerializer,
     FreightTripSerializer,
+    InsertionRequestSerializer,
     ManifestSerializer,
     PackageSerializer,
     ShipmentExceptionSerializer,
@@ -93,6 +105,13 @@ class _OrgScopedViewSet(viewsets.GenericViewSet):
     def _require_ops(self):
         if not self._is_ops(self.request.user):
             raise PermissionDenied("Freight operations privileges required.")
+
+
+def _is_assigned_driver(trip, user):
+    """True when the user is the driver on this trip, and nobody else."""
+    if not (user and user.is_authenticated) or trip.driver_id is None:
+        return False
+    return trip.driver.user_id == user.pk
 
 
 class ShipmentViewSet(
@@ -461,6 +480,77 @@ class FreightTripViewSet(
         )
         return Response(FreightTripSerializer(trip).data)
 
+    @action(detail=True, methods=["get"])
+    def route(self, request, pk=None):
+        """What the driver has done, what is still promised, and the coverage."""
+        trip = self.get_object()
+        try:
+            state = route_state(trip)
+        except FreightError as exc:
+            return _err(exc)
+        coverage = state["coverage"]
+        return Response(
+            {
+                "trip": str(trip.pk),
+                "plan": ConsolidationPlanSerializer(state["plan"]).data,
+                "completed_stops": len(state["completed_stops"]),
+                "remaining_stops": len(state["remaining_stops"]),
+                "committed_minor": coverage["committed_minor"],
+                "trip_cost_minor": coverage["trip_cost_minor"],
+                "covered": coverage["covered"],
+            }
+        )
+
+    @action(detail=True, methods=["post"])
+    def insertion(self, request, pk=None):
+        """Insert a consignment into a trip that is already on the road."""
+        trip = self.get_object()
+        self._require_ops()
+        shipment = Shipment.objects.filter(
+            pk=request.data.get("shipment"),
+            organization=trip.organization,
+        ).first()
+        if shipment is None:
+            return Response({"detail": "shipment is required."}, status=400)
+        try:
+            plan = insert_consignment(
+                organization=trip.organization,
+                trip=trip,
+                shipment=shipment,
+                actor=request.user,
+                reason=request.data.get("reason", ""),
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            ConsolidationPlanSerializer(plan).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["post"], url_path="insertion-requests")
+    def insertion_requests(self, request, pk=None):
+        """Offer a consignment to this trip's driver."""
+        trip = self.get_object()
+        self._require_ops()
+        shipment = Shipment.objects.filter(
+            pk=request.data.get("shipment"),
+            organization=trip.organization,
+        ).first()
+        if shipment is None:
+            return Response({"detail": "shipment is required."}, status=400)
+        try:
+            row = request_insertion(
+                organization=trip.organization,
+                trip=trip,
+                shipment=shipment,
+                requested_by=request.user,
+                reason=request.data.get("reason", ""),
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            InsertionRequestSerializer(row).data, status=status.HTTP_201_CREATED
+        )
+
 
 class ConsolidationPlanViewSet(
     _OrgScopedViewSet,
@@ -504,6 +594,98 @@ class ConsolidationPlanViewSet(
         return Response(
             ConsolidationPlanSerializer(new_plan).data, status=status.HTTP_201_CREATED
         )
+
+    @action(detail=True, methods=["post"], url_path="stops/(?P<stop_id>[^/.]+)/complete")
+    def complete_stop(self, request, pk=None, stop_id=None):
+        """Mark a stop served. A fact, not an edit: it is never undone."""
+        plan = self.get_object()
+        # The driver in the field is the one who knows the stop is done, so the
+        # trip's own driver may record it as well as dispatch.
+        if not self._is_ops(request.user) and not _is_assigned_driver(
+            plan.trip, request.user
+        ):
+            self._require_ops()
+        stop = plan.stops.filter(pk=stop_id).first()
+        if stop is None:
+            return Response({"detail": "That stop is not on the plan."}, status=404)
+        try:
+            stop = mark_stop_complete(
+                plan=plan, stop=stop, actor=request.user, note=request.data.get("note", "")
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(ConsolidationStopSerializer(stop).data)
+
+
+class InsertionRequestViewSet(
+    _OrgScopedViewSet,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+):
+    """The driver's insertion offers (blueprint 11: version-checked acceptance)."""
+
+    queryset = InsertionRequest.objects.all()
+    serializer_class = InsertionRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        """Offer a consignment to a running trip's driver.
+
+        Same service call as the nested trip action, so both spellings of the
+        request measure the same thing and record the same reason.
+        """
+        payload = InsertionRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        trip = FreightTrip.objects.filter(
+            pk=payload.validated_data["trip"].pk,
+            organization_id__in=organization_ids_for(request.user),
+        ).first()
+        if trip is None:
+            return Response({"detail": "trip is required."}, status=400)
+        self._require_ops()
+        shipment = Shipment.objects.filter(
+            pk=payload.validated_data["shipment"].pk, organization=trip.organization
+        ).first()
+        if shipment is None:
+            return Response({"detail": "shipment is required."}, status=400)
+        try:
+            row = request_insertion(
+                organization=trip.organization,
+                trip=trip,
+                shipment=shipment,
+                requested_by=request.user,
+                reason=payload.validated_data.get("reason", ""),
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            InsertionRequestSerializer(row).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        row = self.get_object()
+        try:
+            plan = accept_insertion(
+                request=row, driver=request.user, reason=request.data.get("reason", "")
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(
+            ConsolidationPlanSerializer(plan).data, status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=["post"])
+    def decline(self, request, pk=None):
+        row = self.get_object()
+        try:
+            row = decline_insertion(
+                request=row, driver=request.user, reason=request.data.get("reason", "")
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(InsertionRequestSerializer(row).data)
 
 
 class BackhaulViewSet(_OrgScopedViewSet, mixins.ListModelMixin):
@@ -623,6 +805,30 @@ class ManifestViewSet(
             entity_id=manifest.pk,
         )
         return Response(ManifestSerializer(manifest).data)
+
+    @action(detail=True, methods=["post"])
+    def amend(self, request, pk=None):
+        """Add mid-route packages as a new manifest version.
+
+        The released manifest is evidence of what the vehicle was checked
+        against, so it is superseded rather than edited.
+        """
+        manifest = self.get_object()
+        self._require_ops()
+        packages = Package.objects.filter(
+            pk__in=request.data.get("packages") or [],
+            shipment__organization=manifest.organization,
+        )
+        try:
+            amended = amend_manifest(
+                trip=manifest.trip,
+                packages=list(packages),
+                actor=request.user,
+                reason=request.data.get("reason", ""),
+            )
+        except FreightError as exc:
+            return _err(exc)
+        return Response(ManifestSerializer(amended).data, status=status.HTTP_201_CREATED)
 
 
 def _organization_for(request, fallback_id):

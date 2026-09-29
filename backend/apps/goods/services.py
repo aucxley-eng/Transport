@@ -411,7 +411,7 @@ def cargo_capacity(trip):
     compartment restrictions are visible and enforceable.
     """
     vehicle = trip.vehicle
-    manifest = Manifest.objects.filter(trip=trip).first()
+    manifest = Manifest.objects.filter(trip=trip).order_by("-version").first()
 
     committed_weight = ZERO
     committed_volume = ZERO
@@ -515,7 +515,7 @@ def build_manifest(*, trip, packages, built_by=None):
     if not packages:
         raise GoodsError("A manifest needs at least one package.")
 
-    existing = Manifest.objects.filter(trip=trip).first()
+    existing = Manifest.objects.filter(trip=trip).order_by("-version").first()
     if existing is not None and existing.status != Manifest.Status.DRAFT:
         raise GoodsError("This trip's manifest has already been reconciled.")
 

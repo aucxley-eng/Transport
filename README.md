@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and freight Envelopes 3A and 3B (booking and custody, then consolidated shared load with the coverage floor and backhaul) are implemented and green:
+Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and freight Envelopes 3A, 3B and 3C (booking and custody, consolidated shared load with the coverage floor and backhaul, then mid-route insertion) are implemented and green:
 
 | Component | State |
 |---|---|
 | `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 252 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. |
-| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3B of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, mid-route insertion (3C), returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
+| Tests | 304 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, and frozen prices under insertion. |
+| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3C of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
 
 ## Repository layout
 
@@ -44,7 +44,7 @@ Transport/
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
 3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(implemented: scheduled booking core, Envelope 2A on-demand rides, Envelope 2B corporate shuttles, Envelope 2C charter/hire)*
-4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Courier/parcel, warehouse inventory and mid-route insertion (3C) remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md) and [`docs/phase3b-scope.md`](./docs/phase3b-scope.md))*
+4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Envelope 3C implemented: mid-route insertion that preserves completed stops, holds to a configured delay tolerance, and the driver-offer and manifest-amendment paths. Courier/parcel and warehouse inventory remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md), [`docs/phase3b-scope.md`](./docs/phase3b-scope.md) and [`docs/phase3c-scope.md`](./docs/phase3c-scope.md))*
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
 
@@ -221,6 +221,28 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Plan versions are saved, not edited**: every proposal is a new version pointing at the one it supersedes, publication requires a prior validation pass, and replacing a published plan demands a reason.
 - **A departed trip is frozen**: once the driver starts, no replanning and no superseding; completed stops stay on record.
 - **Empty running is the blueprint's measure**: distance without the defined revenue load divided by measured distance, over completed trips.
+
+### Envelope 3C API surface (mid-route insertion, remaining-stop changes)
+
+| Area | Endpoints |
+|---|---|
+| Route state | `GET /api/v1/freight-trips/{id}/route/` — current published version, completed and remaining stops, coverage |
+| Dispatcher insertion | `POST /api/v1/freight-trips/{id}/insertion/` |
+| Driver offers | `GET/POST /api/v1/insertion-requests/`, `POST /api/v1/freight-trips/{id}/insertion-requests/`, `POST /api/v1/insertion-requests/{id}/accept/`, `/{id}/decline/` |
+| Stop progress | `POST /api/v1/consolidation-plans/{id}/stops/{stop_id}/complete/` |
+| Manifest amendment | `POST /api/v1/manifests/{id}/amend/` — new manifest version for the mid-route pickup |
+
+### Envelope 3C invariants enforced
+
+- **A completed stop is immutable**: same place, same sequence, same window, still completed, in every later version. Insertion only touches what has not happened yet, and only the trip's own driver or a dispatcher may record that a stop is done.
+- **Remaining stops keep their order**: the new stop is placed by its own service window; the stops already promised to other shippers are never silently reordered. See [`docs/phase3c-scope.md`](./docs/phase3c-scope.md).
+- **Insertion runs inside a configured delay tolerance, never beyond it**: `Organization.insertion_grace_minutes` (default 30, capped at 240). Within it, the insertion publishes; beyond it, it is refused and the refusal names the stop that would be missed.
+- **A dispatcher inserts directly, a driver accepts an offer**: first accept wins, in a transaction that locks the request row and re-checks capacity and the plan version, because a screen that was valid a minute ago is not proof. An offer only the assigned driver can answer, and only while the trip could still act on it.
+- **The inserted consignment keeps its own frozen total** for the leg it will travel, quoted and accepted on the normal booking path. Nobody else is repriced, and coverage is re-reported with the new revenue.
+- **Every insertion is a new plan version** pointing at the one it supersedes, with a change reason and a summary of what moved, by how much, and who approved it. The change is announced on the outbox and written to the audit trail.
+- **The manifest is amended, not edited**: a mid-route pickup publishes a new manifest version that still requires reconciliation and re-release, and the previous released version stays readable.
+- **Every refusal explains itself**, in the API response and on the stored request, so unassigned work stays visible.
+
 
 ## Environment variables
 

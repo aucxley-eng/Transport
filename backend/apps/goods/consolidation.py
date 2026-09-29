@@ -276,24 +276,31 @@ def _explanation(plan):
 
 
 @transaction.atomic
-def validate_plan(plan):
+def validate_plan(plan, *, loaded_shipment_ids=None):
     """Re-derive every rule from the database before publication.
 
     "Validate its proposed result against your own business rules before
     publication." Nothing here trusts the proposer.
+
+    ``loaded_shipment_ids`` names consignments already physically on the
+    vehicle. The manifest is the cargo ledger, so their weight and volume are
+    already committed; counting them again would charge a mid-route plan for
+    load the truck is carrying.
     """
     trip = plan.trip
     problems = []
     admitted = list(plan.shipments.filter(accepted=True).select_related("shipment"))
     rejected = plan.shipments.filter(accepted=False).count()
+    loaded = set(loaded_shipment_ids or ())
 
     if not admitted:
         problems.append("The plan carries no consignment.")
     if rejected:
         problems.append(f"{rejected} offered consignment(s) were not assignable.")
 
-    weight = sum((entry.shipment.total_weight_kg for entry in admitted), ZERO)
-    volume = sum((entry.shipment.total_volume_m3 for entry in admitted), ZERO)
+    to_load = [entry for entry in admitted if entry.shipment_id not in loaded]
+    weight = sum((entry.shipment.total_weight_kg for entry in to_load), ZERO)
+    volume = sum((entry.shipment.total_volume_m3 for entry in to_load), ZERO)
     capacity = cargo_capacity(trip)
     if weight > capacity["free_weight_kg"]:
         problems.append("The plan exceeds the vehicle's remaining cargo weight.")
@@ -414,7 +421,7 @@ def assess_coverage(trip):
     the trip only departs once the shipments physically on it together cover
     ``trip_cost_minor``. Nothing is apportioned or repriced.
     """
-    manifest = Manifest.objects.filter(trip=trip).first()
+    manifest = Manifest.objects.filter(trip=trip).order_by("-version").first()
     committed = 0
     if manifest is not None:
         # Each shipper's revenue counted once, however many of its packages are
@@ -461,7 +468,7 @@ def confirm_departure(trip):
     if trip.started_at is not None:
         raise FreightError("This trip has already departed.")
 
-    manifest = Manifest.objects.filter(trip=trip).first()
+    manifest = Manifest.objects.filter(trip=trip).order_by("-version").first()
     if manifest is None or manifest.status != Manifest.Status.RELEASED:
         raise FreightError("Release the manifest before departure.")
 

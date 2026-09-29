@@ -45,6 +45,22 @@ from apps.corporate.services import (
 from apps.orders.models import Order
 
 
+def _weekday_before(day):
+    """The nearest Monday-to-Friday day strictly before ``day``."""
+    day -= timedelta(days=1)
+    while day.weekday() > 4:
+        day -= timedelta(days=1)
+    return day
+
+
+def _weekday_after(day):
+    """The nearest Monday-to-Friday day strictly after ``day``."""
+    day += timedelta(days=1)
+    while day.weekday() > 4:
+        day += timedelta(days=1)
+    return day
+
+
 class CorporateFixture(TestCase):
     def setUp(self):
         self.company = Organization.objects.create(name="Acme Ltd", slug="acme")
@@ -378,14 +394,13 @@ class ClauseFourDepartureKeepsHistoryTestCase(CorporateFixture):
             valid_from=date(2026, 1, 1),
             capacity=10,
         )
-        past = generate_shuttle_runs(
-            template,
-            start=timezone.localdate() - timedelta(days=7),
-            end=timezone.localdate() - timedelta(days=7),
-        )[0]
-        future = generate_shuttle_runs(
-            template, start=timezone.localdate(), end=timezone.localdate()
-        )[0]
+        # The template runs Monday to Friday, so the dates either side of today
+        # have to be weekdays: on a Saturday the platform runs nothing, and the
+        # test would be asserting against a calendar, not against the platform.
+        past_day = _weekday_before(timezone.localdate())
+        future_day = _weekday_after(timezone.localdate())
+        past = generate_shuttle_runs(template, start=past_day, end=past_day)[0]
+        future = generate_shuttle_runs(template, start=future_day, end=future_day)[0]
         roster_member(past, self.member)
         roster_member(future, self.member)
 

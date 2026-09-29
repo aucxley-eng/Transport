@@ -6,6 +6,7 @@ from apps.goods.views import (
     ConsolidationPlanViewSet,
     EmptyRunningReportViewSet,
     FreightTripViewSet,
+    InsertionRequestViewSet,
     ManifestViewSet,
     PackageViewSet,
     ShipmentExceptionViewSet,
@@ -20,6 +21,9 @@ router.register("freight-trips", FreightTripViewSet, basename="freight-trip")
 router.register("manifests", ManifestViewSet, basename="manifest")
 router.register(
     "consolidation-plans", ConsolidationPlanViewSet, basename="consolidation-plan"
+)
+router.register(
+    "insertion-requests", InsertionRequestViewSet, basename="insertion-request"
 )
 router.register("backhaul", BackhaulViewSet, basename="backhaul")
 router.register("reports/empty-running", EmptyRunningReportViewSet, basename="empty-running")

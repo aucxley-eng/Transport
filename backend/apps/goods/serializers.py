@@ -5,6 +5,7 @@ from apps.goods.models import (
     ConsolidationStop,
     CustodyEvent,
     FreightTrip,
+    InsertionRequest,
     Manifest,
     ManifestLine,
     MeasurementBasis,
@@ -211,6 +212,7 @@ class ConsolidationStopSerializer(serializers.ModelSerializer):
             "window_start",
             "window_end",
             "is_completed",
+            "completed_at",
         ]
 
 
@@ -267,6 +269,56 @@ class ConsolidationPlanSerializer(serializers.ModelSerializer):
         )
 
 
+class InsertionRequestSerializer(serializers.ModelSerializer):
+    """The offer as the driver sees it.
+
+    Only the trip, the consignment and the reason come from the caller: the
+    status, the tolerance and the capacity snapshot are what the platform
+    measured, and a client that could set them would be writing the evidence.
+    """
+
+    shipment_reference = serializers.CharField(
+        source="shipment.reference", read_only=True
+    )
+    driver_phone = serializers.CharField(
+        source="trip.driver.user.phone", read_only=True, default=""
+    )
+
+    class Meta:
+        model = InsertionRequest
+        fields = [
+            "id",
+            "trip",
+            "shipment",
+            "shipment_reference",
+            "driver_phone",
+            "status",
+            "reason",
+            "tolerance_minutes",
+            "free_weight_kg",
+            "plan_version",
+            "requested_by",
+            "decided_by",
+            "decided_at",
+            "resulting_plan",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "shipment_reference",
+            "driver_phone",
+            "status",
+            "tolerance_minutes",
+            "free_weight_kg",
+            "plan_version",
+            "requested_by",
+            "decided_by",
+            "decided_at",
+            "resulting_plan",
+            "created_at",
+        ]
+
+
 class ManifestLineSerializer(serializers.ModelSerializer):
     class Meta:
         model = ManifestLine
@@ -292,6 +344,8 @@ class ManifestSerializer(serializers.ModelSerializer):
             "id",
             "trip",
             "status",
+            "version",
+            "supersedes",
             "lines",
             "is_reconciled",
             "reconciled_at",
