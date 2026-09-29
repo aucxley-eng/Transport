@@ -83,6 +83,14 @@ if os.environ.get("DB_ENGINE"):
             "PASSWORD": os.environ.get("DB_PASSWORD", "postgres"),
             "HOST": os.environ.get("DB_HOST", "localhost"),
             "PORT": os.environ.get("DB_PORT", "5432"),
+            # A pooled host hands a connection back to the pool between
+            # requests, so health-check before lending it to another one and
+            # keep it warm rather than dialling per request.
+            "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+            "OPTIONS": {
+                "connect_timeout": int(os.environ.get("DB_CONNECT_TIMEOUT", "10")),
+            },
         }
     }
 else:
