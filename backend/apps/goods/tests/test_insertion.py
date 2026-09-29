@@ -291,6 +291,29 @@ class RemainingStopOrderTestCase(RunningTripFixture):
         after = [s.place_id for s in new_plan.stops.filter(is_completed=False).order_by("sequence")]
         self.assertEqual(after, before + [inserted.collection_id])
 
+    def test_stop_numbers_stay_contiguous_across_insertions(self):
+        trip, plan, _ = self._running_trip()
+        first = self._shipment("C", weight=100, total=20_000, collection=self.roadside)
+        second = self._shipment("D", weight=50, total=10_000, collection=self.roadside)
+        second_plan = insert_consignment(
+            organization=self.org, trip=trip, shipment=first, actor=self.dispatcher
+        )
+        third_plan = insert_consignment(
+            organization=self.org, trip=trip, shipment=second, actor=self.dispatcher
+        )
+        for version in (second_plan, third_plan):
+            numbers = [
+                stop.sequence for stop in version.stops.order_by("sequence")
+            ]
+            # Numbered from zero, with no gap and no repeat, whatever was added.
+            self.assertEqual(numbers, list(range(len(numbers))))
+        # The completed stop never moved, in either version.
+        served = plan.stops.filter(is_completed=True).get()
+        for version in (second_plan, third_plan):
+            carried = version.stops.get(place=served.place)
+            self.assertEqual(carried.sequence, served.sequence)
+            self.assertTrue(carried.is_completed)
+
     def test_the_loading_order_agrees_with_the_new_route(self):
         trip, plan, _ = self._running_trip()
         inserted = self._shipment("C", weight=100, total=20_000, collection=self.roadside)

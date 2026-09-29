@@ -446,7 +446,9 @@ def _publish_inserted_version(
             organization=organization,
             plan=plan,
             place=place,
-            sequence=len(completed) + index + 1,
+            # The completed run keeps its own numbers; the rest continues from
+            # there, the way 3B numbers stops from zero.
+            sequence=len(completed) + index,
             window_start=window_start,
             window_end=window_end,
         )
@@ -492,7 +494,7 @@ def _publish_inserted_version(
                 organization=organization,
                 plan=plan,
                 place=shipment.destination,
-                sequence=len(completed) + len(entries) + 1,
+                sequence=len(completed) + len(entries),
                 window_start=shipment.service_window_start,
                 window_end=shipment.service_window_end,
             )
