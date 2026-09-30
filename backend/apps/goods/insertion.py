@@ -66,6 +66,7 @@ REASON_TOO_HEAVY = "no remaining cargo weight for this consignment"
 REASON_TOO_BULKY = "no remaining cargo volume for this consignment"
 REASON_NO_COMPARTMENT = "no cargo compartment can take this consignment"
 REASON_WRONG_DESTINATION = "the destination is not on this trip"
+REASON_MULTI_DROP_INSERTION = "a multi-drop courier order is not inserted mid-route"
 REASON_ALREADY_SERVED = "the collection point has already been served on this trip"
 REASON_WINDOW_PASSED = "the collection window has already passed"
 REASON_TOLERANCE_EXCEEDED = "would delay an already-promised stop past the tolerance"
@@ -296,6 +297,13 @@ def _insertion_refusal(*, organization, trip, shipment, grace):
         return REASON_SHIPMENT_MOVING
     if plan_exists_with_shipment(trip, shipment):
         return REASON_ALREADY_INSERTED
+    if shipment.is_multi_drop():
+        # 3C inserts one consignment with one delivery end. A courier order has
+        # a stop per parcel drop, and this module would publish a plan carrying
+        # only the order's destination, silently promising fewer stops than the
+        # order owes. Refused by name rather than half-inserted; planning a
+        # multi-drop order is 3B's propose path, before the truck leaves.
+        return REASON_MULTI_DROP_INSERTION
     if shipment.destination_id != trip.destination_id:
         return REASON_WRONG_DESTINATION
     if shipment.service_window_end <= _now():

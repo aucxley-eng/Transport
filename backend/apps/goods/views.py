@@ -6,6 +6,7 @@ delete route, so "branch staff cannot change recorded custody history" holds at
 the API surface as well as in the service layer.
 """
 
+from django.core.exceptions import ValidationError
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -26,6 +27,12 @@ from apps.goods.consolidation import (
     publish_plan,
     supersede_plan,
     validate_plan,
+)
+from apps.goods.courier import (
+    book_courier_order,
+    deliver_package,
+    fail_delivery_attempt,
+    quote_courier_order,
 )
 from apps.goods.insertion import (
     accept_insertion,
@@ -85,6 +92,19 @@ def _err(exc):
     return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _place(value):
+    """A place by id, or None.
+
+    A body that carries "not-a-uuid" is a bad request, not a server error, so the
+    lookup refuses to hand a ValidationError out of the view. The service layers
+    then report the missing place by name, the way every other refusal reads.
+    """
+    try:
+        return Place.objects.filter(pk=value).first()
+    except (TypeError, ValueError, ValidationError):
+        return None
+
+
 class _OrgScopedViewSet(viewsets.GenericViewSet):
     """Query set always constrained to the caller's organizations (operator
     isolation, blueprint 3)."""
@@ -136,11 +156,15 @@ class ShipmentViewSet(
 
         The quote is the source of truth for the measurements and basis, so a
         caller cannot book different numbers from the ones they were priced on.
+        A courier quote books a courier order, priced and addressed parcel by
+        parcel; the caller says nothing else.
         """
         self._require_ops()
         quote = Quote.objects.filter(pk=request.data.get("quote")).first()
         if quote is None:
             return Response({"detail": "A quote is required."}, status=400)
+        if quote.request_payload.get("kind") == "courier_order":
+            return self._book_courier(request, quote)
         if quote.status == Quote.Status.VALID:
             try:
                 quote.accept()
@@ -148,8 +172,8 @@ class ShipmentViewSet(
                 return _err(GoodsError(str(exc)))
         service = Service.objects.filter(pk=quote.service_id).first()
         organization = _organization_for(request, quote.organization_id)
-        collection = Place.objects.filter(pk=request.data.get("collection")).first()
-        destination = Place.objects.filter(pk=request.data.get("destination")).first()
+        collection = _place(request.data.get("collection"))
+        destination = _place(request.data.get("destination"))
         try:
             shipment = create_shipment(
                 quote=quote,
@@ -179,14 +203,81 @@ class ShipmentViewSet(
         )
         return Response(ShipmentSerializer(shipment).data, status=status.HTTP_201_CREATED)
 
+    def _book_courier(self, request, quote):
+        """Book a courier order: one pickup, one charge per parcel."""
+        organization = _organization_for(request, quote.organization_id)
+        if quote.status == Quote.Status.VALID:
+            try:
+                quote.accept()
+            except ValueError as exc:
+                return _err(GoodsError(str(exc)))
+        try:
+            order = book_courier_order(
+                quote=quote,
+                organization=organization,
+                sender=request.user if request.data.get("sender") else None,
+                load_type=request.data.get("load_type"),
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        record_audit(
+            actor=request.user,
+            organization=organization,
+            action="goods.courier_order_booked",
+            entity_type="shipment",
+            entity_id=order.pk,
+            new_value={"reference": order.reference, "parcels": order.package_count},
+        )
+        return Response(ShipmentSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="courier-quote")
+    def courier_quote(self, request):
+        """Price a courier order parcel by parcel against the account's tariff."""
+        service = Service.objects.filter(
+            pk=request.data.get("service"), service_type=Service.ServiceType.COURIER
+        ).first()
+        organization = _organization_for(request, None)
+        collection = _place(request.data.get("collection"))
+        destination = _place(request.data.get("destination"))
+        try:
+            quote = quote_courier_order(
+                organization=organization,
+                service=service,
+                collection=collection,
+                destination=destination,
+                # A JSON caller sends "parcels"; a form post sends "packages".
+                packages=request.data.get("parcels")
+                or request.data.get("packages")
+                or [],
+                service_window_start=request.data.get("service_window_start"),
+                service_window_end=request.data.get("service_window_end"),
+                sender_name=request.data.get("sender_name", ""),
+                sender_phone=request.data.get("sender_phone", ""),
+                handling_needs=request.data.get("handling_needs") or [],
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        return Response(
+            {
+                "quote": quote.pk,
+                "total_minor": quote.total_minor,
+                "currency": quote.currency,
+                "basis": quote.basis,
+                "rate_card": quote.rate_card_name,
+                "parcels": quote.request_payload.get("parcels", []),
+                "expires_at": quote.expires_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     @action(detail=False, methods=["post"], url_path="quote")
     def quote(self, request):
         service = Service.objects.filter(
             pk=request.data.get("service"), service_type=Service.ServiceType.FREIGHT
         ).first()
         organization = _organization_for(request, None)
-        collection = Place.objects.filter(pk=request.data.get("collection")).first()
-        destination = Place.objects.filter(pk=request.data.get("destination")).first()
+        collection = _place(request.data.get("collection"))
+        destination = _place(request.data.get("destination"))
         try:
             quote = quote_shipment(
                 organization=organization,
@@ -240,10 +331,14 @@ class ShipmentViewSet(
     @action(detail=True, methods=["post"])
     def evidence(self, request, pk=None):
         shipment = self.get_object()
+        package = Package.objects.filter(
+            pk=request.data.get("package"), shipment=shipment
+        ).first()
         try:
             evidence = record_evidence(
                 shipment,
                 kind=request.data.get("kind", ""),
+                package=package,
                 photos=request.data.get("photos") or [],
                 notes=request.data.get("notes", ""),
                 recipient_name=request.data.get("recipient_name", ""),
@@ -298,6 +393,14 @@ class ShipmentViewSet(
             )
         except GoodsError as exc:
             return _err(exc)
+        record_audit(
+            actor=request.user,
+            organization=shipment.organization,
+            action="goods.courier_parcel_returned",
+            entity_type="shipment",
+            entity_id=shipment.pk,
+            new_value={"return_of": shipment.reference, "parcels": len(packages)},
+        )
         return Response(ShipmentSerializer(returned).data, status=status.HTTP_201_CREATED)
 
 
@@ -344,7 +447,7 @@ class PackageViewSet(
         corrects = CustodyEvent.objects.filter(
             pk=request.data.get("corrects_event")
         ).first()
-        location = Place.objects.filter(pk=request.data.get("location")).first()
+        location = _place(request.data.get("location"))
         try:
             event = record_custody_event(
                 package,
@@ -383,6 +486,84 @@ class PackageViewSet(
             ).data
         )
 
+    def _require_ops_or_its_driver(self, package):
+        """A handover or an empty doorstep is a fact about the road.
+
+        The driver holding the parcel is the one who knows it happened, so they
+        may record it, the same way 3C lets a trip's own driver complete its
+        stops. Dispatch may always do it, for a parcel handed over at a counter
+        or proved after the fact. Nobody else can.
+        """
+        if self._is_ops(self.request.user):
+            return
+        trips = FreightTrip.objects.filter(
+            consolidation_plans__shipments__shipment=package.shipment
+        ).distinct()
+        if any(_is_assigned_driver(trip, self.request.user) for trip in trips):
+            return
+        self._require_ops()
+
+    @action(detail=True, methods=["post"], url_path="deliver")
+    def deliver(self, request, pk=None):
+        """Deliver this parcel and prove it to the person it was addressed to.
+
+        A photo alone is refused, and so is proof from anyone other than the
+        parcel's recipient. The order stays partially delivered until every
+        parcel is done, so the outstanding ones remain visible.
+        """
+        package = self.get_object()
+        self._require_ops_or_its_driver(package)
+        try:
+            delivered = deliver_package(
+                package,
+                recipient_name=request.data.get("recipient_name", ""),
+                recipient_id_type=request.data.get("recipient_id_type", ""),
+                recipient_id_last4=request.data.get("recipient_id_last4", ""),
+                otp_verified=bool(request.data.get("otp_verified", False)),
+                signature_ref=request.data.get("signature_ref", ""),
+                is_delegate=bool(request.data.get("is_delegate", False)),
+                photos=request.data.get("photos") or [],
+                notes=request.data.get("notes", ""),
+                device_event_time=request.data.get("device_event_time"),
+                recorded_by=request.user,
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        record_audit(
+            actor=request.user,
+            organization=package.organization,
+            action="goods.courier_parcel_delivered",
+            entity_type="package",
+            entity_id=package.pk,
+            new_value={
+                "parcel": package.label,
+                "recipient": package.recipient_name,
+                "order": package.shipment.reference,
+            },
+        )
+        return Response(
+            PackageSerializer(delivered).data, status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=["post"], url_path="failed-attempt")
+    def failed_attempt(self, request, pk=None):
+        """Record a failed delivery attempt against this parcel."""
+        package = self.get_object()
+        self._require_ops_or_its_driver(package)
+        try:
+            exception = fail_delivery_attempt(
+                package,
+                kind=request.data.get("kind", "failed_attempt"),
+                next_action=request.data.get("next_action", ""),
+                detail=request.data.get("detail", ""),
+                raised_by=request.user,
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        return Response(
+            ShipmentExceptionSerializer(exception).data, status=status.HTTP_201_CREATED
+        )
+
 
 class FreightTripViewSet(
     _OrgScopedViewSet,
@@ -406,8 +587,8 @@ class FreightTripViewSet(
                 vehicle=vehicle,
                 driver=driver,
                 service=service,
-                origin=Place.objects.filter(pk=request.data.get("origin")).first(),
-                destination=Place.objects.filter(pk=request.data.get("destination")).first(),
+                origin=_place(request.data.get("origin")),
+                destination=_place(request.data.get("destination")),
                 planned_start=request.data.get("planned_start"),
                 planned_end=request.data.get("planned_end"),
             )
@@ -698,7 +879,7 @@ class BackhaulViewSet(_OrgScopedViewSet, mixins.ListModelMixin):
     def list(self, request):
         from apps.catalog.models import Place
 
-        origin = Place.objects.filter(pk=request.query_params.get("origin")).first()
+        origin = _place(request.query_params.get("origin"))
         destination = Place.objects.filter(
             pk=request.query_params.get("destination")
         ).first()

@@ -25,6 +25,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from apps.catalog.models import Place, Service
 from apps.fleet.models import Vehicle
 from apps.goods.models import (
     ConsolidationPlan,
@@ -41,9 +42,17 @@ from apps.goods.services import cargo_capacity
 
 ZERO = Decimal("0")
 
+# Blueprint 10 keeps passenger and goods operations apart, so goods work is
+# never planned onto a trip that is running one of these.
+PASSENGER_SERVICE_TYPES = (
+    Service.ServiceType.SCHEDULED,
+    Service.ServiceType.CORPORATE,
+)
+
 # Rejection reasons, so dispatch reads a cause rather than a bare "no".
 REASON_FULL_TRUCKLOAD_ALONE = "a full truckload travels alone"
 REASON_NOT_SHARED_LOAD = "not a shared-load consignment"
+REASON_SHIPMENT_CLOSED = "the consignment is already closed"
 REASON_TOO_HEAVY = "exceeds remaining cargo weight"
 REASON_TOO_BULKY = "exceeds remaining cargo volume"
 REASON_WINDOW_OUTSIDE_TRIP = "service window falls outside the trip"
@@ -53,7 +62,8 @@ REASON_ALREADY_PLANNED = "already on another published plan"
 REASON_WORKING_HOURS = "would exceed the driver's working hours"
 REASON_TRIP_DEPARTED = "the driver has already departed"
 REASON_OTHER_ORGANIZATION = "belongs to another organization"
-REASON_SHIPMENT_CLOSED = "consignment is already closed"
+REASON_TRIP_IS_PASSENGER = "cannot load courier work onto a passenger service"
+REASON_DROP_OVERLOADS_WINDOW = "the route of drops would exceed the trip window"
 
 
 class FreightError(Exception):
@@ -162,14 +172,10 @@ def propose_consolidation(*, organization, trip, shipments, proposed_by=None):
         if shipment.load_type == LoadType.FULL_TRUCKLOAD:
             full_truckload_admitted = True
 
-        for place, window_start, window_end in (
-            (shipment.collection, trip.planned_start, trip.planned_start),
-            (
-                shipment.destination,
-                shipment.service_window_start,
-                shipment.service_window_end,
-            ),
-        ):
+        # A courier order names its recipients on the parcels, so it needs a
+        # stop at every parcel's drop rather than one at its destination: five
+        # parcels for five addresses are five stops, not two.
+        for place, window_start, window_end in _stops_for(shipment, trip.planned_start):
             existing = stops.get(place.pk)
             if existing is not None:
                 # A shared stop widens to the union of its consignments' windows.
@@ -204,6 +210,63 @@ def propose_consolidation(*, organization, trip, shipments, proposed_by=None):
     return plan
 
 
+def _stops_for(shipment, collection_window):
+    """The (place, window_start, window_end) a consignment asks the vehicle for.
+
+    Freight asks for two: the collection, pinned to the moment the trip begins,
+    and its destination, across its own service window. A courier order asks for
+    its collection and one stop per distinct parcel drop, because that is where
+    the parcels actually go.
+    """
+    drops = list(
+        shipment.packages.filter(recipient_place__isnull=False)
+        .values_list("recipient_place_id", flat=True)
+        .distinct()
+    )
+    if not drops:
+        return [
+            (shipment.collection, collection_window, collection_window),
+            (
+                shipment.destination,
+                shipment.service_window_start,
+                shipment.service_window_end,
+            ),
+        ]
+    requested = [(shipment.collection, collection_window, collection_window)]
+    for place in Place.objects.filter(pk__in=drops).order_by("name", "pk"):
+        requested.append(
+            (place, shipment.service_window_start, shipment.service_window_end)
+        )
+    return requested
+
+
+def _drop_refusal(shipment, trip):
+    """Why this order's drops will not fit, or None if they will.
+
+    A courier order multiplies the stops, and stops are the driver's time: a
+    route of drops is bounded by the clock rather than by distance. If the drops
+    cannot fit inside the trip window, the order is refused here naming the
+    overrun, rather than promised and missed. The driver's working day is already
+    gated on the trip's own length, which bounds the stops inside it.
+    """
+    from .courier import DROP_SERVICE_MINUTES
+
+    stops = {
+        place.pk
+        for place, _, _ in _stops_for(shipment, trip.planned_start)
+    }
+    if not stops:
+        return None
+    minutes = len(stops) * DROP_SERVICE_MINUTES
+    available = int((trip.planned_end - trip.planned_start).total_seconds() / 60)
+    if minutes > available:
+        return (
+            f"{REASON_DROP_OVERLOADS_WINDOW}: {len(stops)} drops need {minutes} "
+            f"minutes at {DROP_SERVICE_MINUTES} each, and this trip has {available}."
+        )
+    return None
+
+
 def _rejection_reason(
     shipment,
     *,
@@ -221,15 +284,30 @@ def _rejection_reason(
         return REASON_SHIPMENT_CLOSED
     if working_hours and trip_hours > working_hours:
         return REASON_WORKING_HOURS
+    # Blueprint 10: "Parcel pickup windows must not override the published
+    # passenger timetable." Goods work never rides a passenger-service trip.
+    if trip.service is not None and trip.service.service_type in PASSENGER_SERVICE_TYPES:
+        return REASON_TRIP_IS_PASSENGER
     if trip.origin_id is not None and shipment.collection_id != trip.origin_id:
         return REASON_WRONG_ORIGIN
-    if trip.destination_id is not None and shipment.destination_id != trip.destination_id:
+    # A multi-drop order is served at each parcel's place, so the trip's single
+    # destination is not what it must match; freight still keeps that gate.
+    multi_drop = shipment.packages.filter(recipient_place__isnull=False).exists()
+    if (
+        not multi_drop
+        and trip.destination_id is not None
+        and shipment.destination_id != trip.destination_id
+    ):
         return REASON_WRONG_DESTINATION
     if (
         shipment.service_window_start < trip.planned_start
         or shipment.service_window_end > trip.planned_end
     ):
         return REASON_WINDOW_OUTSIDE_TRIP
+    if multi_drop:
+        overrun = _drop_refusal(shipment, trip)
+        if overrun:
+            return overrun
 
     is_full = shipment.load_type == LoadType.FULL_TRUCKLOAD
     # A full truckload is the whole vehicle: it rides alone or not at all, and

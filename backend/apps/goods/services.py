@@ -229,6 +229,13 @@ def create_shipment(
         raise GoodsError("The service window must end after it starts.")
     if load_type is not None and load_type not in LoadType.values:
         raise GoodsError("load_type must be a shared load or a full truckload.")
+    # Freight is one consignment to one consignee, so the order names them. A
+    # courier order has several, and the parcels name them instead; those are
+    # booked by courier.book_courier_order, not here.
+    if not str(recipient_name or "").strip():
+        raise GoodsError("A consignment needs the name of the person it is for.")
+    if not str(recipient_phone or "").strip():
+        raise GoodsError("A consignment needs a contact for the person it is for.")
 
     measurements = dict(quote.request_payload or {})
     created = []
@@ -806,6 +813,7 @@ def record_evidence(
     shipment,
     *,
     kind,
+    package=None,
     photos=None,
     notes="",
     recipient_name="",
@@ -823,13 +831,21 @@ def record_evidence(
     let a photograph alone prove that the intended recipient received the
     correct package": delivery evidence without recipient verification is
     refused however many photos it carries.
+
+    A multi-recipient order is delivered parcel by parcel, so its evidence must
+    say which parcel it is about, and the recipient it names must be that
+    parcel's recipient. Proving the wrong person received a parcel is the same
+    failure as proving nothing.
     """
     if kind not in ShipmentEvidence.Kind.values:
         raise GoodsError("Unknown evidence kind.")
+    if package is not None and package.shipment_id != shipment.pk:
+        raise GoodsError("That package is not on this consignment.")
 
     evidence = ShipmentEvidence(
         organization=shipment.organization,
         shipment=shipment,
+        package=package,
         kind=kind,
         photos=list(photos or []),
         notes=notes,
@@ -848,8 +864,27 @@ def record_evidence(
                 "Delivery evidence requires recipient verification; a photo alone "
                 "does not prove the intended recipient received the package."
             )
-        if not shipment.packages.filter(status=Package.Status.DELIVERED).exists():
-            raise GoodsError("No package on this shipment is marked delivered.")
+        if package is None:
+            if shipment.packages.filter(recipient_place__isnull=False).exists():
+                raise GoodsError(
+                    "This order is delivered parcel by parcel, so the evidence "
+                    "must name the parcel it is about."
+                )
+            if not shipment.packages.filter(status=Package.Status.DELIVERED).exists():
+                raise GoodsError("No package on this shipment is marked delivered.")
+        else:
+            if package.status != Package.Status.DELIVERED:
+                raise GoodsError(
+                    f"{package.label} is not marked delivered, so it cannot have "
+                    "delivery evidence."
+                )
+            if package.recipient_name and str(recipient_name or "").strip() != (
+                package.recipient_name
+            ):
+                raise GoodsError(
+                    f"{package.label} is addressed to {package.recipient_name}, not "
+                    f"{recipient_name or 'anyone else'}."
+                )
     evidence.save()
     return evidence
 
@@ -938,23 +973,58 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
     A return is a new consignment that references the original packages and runs
     the stops in reverse. The original shipment and its custody history are left
     intact.
+
+    A courier parcel that failed delivery is returnable too: the recipient was
+    absent, so the parcel was never delivered, and that is exactly when a sender
+    wants it back. Such a parcel is collected from its own drop rather than
+    from the order's destination, because its drop is where the van failed.
     """
     if shipment.status == Shipment.Status.CANCELLED:
         raise GoodsError("A cancelled shipment cannot be returned.")
     packages = list(packages or [])
     if not packages:
         raise GoodsError("A return needs at least one package.")
+    # Each parcel is judged on its own record: one parcel's failed attempt is
+    # not a licence to send back a sibling that was never attempted.
+    returnable_kinds = (
+        ShipmentException.Kind.FAILED_ATTEMPT,
+        ShipmentException.Kind.REFUSED,
+        ShipmentException.Kind.ABSENT,
+    )
+    failed = set(
+        ShipmentException.objects.filter(
+            package__in=packages,
+            kind__in=returnable_kinds,
+            status=ShipmentException.Status.OPEN,
+        ).values_list("package_id", flat=True)
+    )
     for package in packages:
         if package.shipment_id != shipment.pk:
             raise GoodsError("Only packages from the original shipment can be returned.")
-        if package.status not in (
+        returnable = (
             Package.Status.DELIVERED,
             Package.Status.MISSING,
             Package.Status.DAMAGED,
+        )
+        # An order-level return of one parcel must not be blocked by its siblings.
+        if package.status not in returnable and not (
+            package.pk in failed
+            and package.status
+            in (Package.Status.PENDING, Package.Status.LOADED, Package.Status.IN_TRANSIT)
         ):
             raise GoodsError(
                 f"{package.label} has not been delivered and cannot be returned."
             )
+
+    # One parcel comes back from its own drop; several from the order's
+    # destination, which is where a single-consignee consignment ended up.
+    single_drop = len(packages) == 1 and packages[0].recipient_place_id is not None
+    pickup = (
+        packages[0].recipient_place
+        if single_drop
+        else shipment.destination
+    )
+    is_courier = (service or shipment.service).service_type == Service.ServiceType.COURIER
 
     window_start = _now()
     window_end = window_start + timedelta(days=1)
@@ -963,11 +1033,15 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
         reference=_ref("SHP"),
         service=service or shipment.service,
         sender=shipment.sender,
-        sender_name=shipment.recipient_name,
-        sender_phone=shipment.recipient_phone,
+        sender_name=(
+            packages[0].recipient_name if single_drop else shipment.recipient_name
+        ),
+        sender_phone=(
+            packages[0].recipient_phone if single_drop else shipment.recipient_phone
+        ),
         recipient_name=shipment.sender_name,
         recipient_phone=shipment.sender_phone,
-        collection=shipment.destination,
+        collection=pickup,
         destination=shipment.collection,
         package_count=len(packages),
         total_weight_kg=sum((p.weight_kg for p in packages), ZERO),
@@ -995,15 +1069,27 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
     )
 
     for package in packages:
-        clone = _clone_package(return_shipment, package)
+        clone = _clone_package(return_shipment, package, is_courier=is_courier)
         package.status = Package.Status.RETURNED
         package.save(update_fields=["status", "updated_at"])
+        # The exception that sent the parcel back is dealt with by the return, so
+        # it closes here rather than leaving the order at "exception" forever. A
+        # claim or a damage dispute is not settled by a return, so it stays open.
+        for exception in ShipmentException.objects.filter(
+            package=package,
+            kind__in=returnable_kinds,
+            status=ShipmentException.Status.OPEN,
+        ):
+            resolve_exception(
+                exception,
+                note=f"Parcel returned to sender on {return_shipment.reference}",
+            )
         record_custody_event(
             package,
             event_type=CustodyEvent.EventType.RETURNED,
-            giving_party=shipment.recipient_name,
+            giving_party=package.recipient_name or shipment.recipient_name,
             receiving_party=shipment.organization.name,
-            location=shipment.destination,
+            location=pickup,
             device_event_time=_now(),
             note=f"Returned to sender on {return_shipment.reference}",
         )
@@ -1012,7 +1098,7 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
             event_type=CustodyEvent.EventType.BOOKED,
             giving_party=shipment.organization.name,
             receiving_party=shipment.sender_name,
-            location=shipment.destination,
+            location=pickup,
             device_event_time=_now(),
             note="Return consignment created",
         )
@@ -1020,7 +1106,7 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
     ShipmentLeg.objects.create(
         organization=shipment.organization,
         shipment=return_shipment,
-        stop=shipment.destination,
+        stop=pickup,
         sequence=0,
         status=ShipmentLeg.Status.PLANNED,
         planned_at=window_start,
@@ -1033,10 +1119,26 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
         status=ShipmentLeg.Status.PLANNED,
         planned_at=window_end,
     )
+
+    # The original's status is a fact about its own parcels, and one of them has
+    # just moved. A courier order whose last outstanding parcel was sent back must
+    # stop reading "exception" and say where it really is, or dispatch keeps
+    # chasing a problem the return already answered.
+    from .courier import refresh_order_status  # local: courier imports this module
+
+    shipment.refresh_from_db()
+    refresh_order_status(shipment)
     return return_shipment
 
 
-def _clone_package(shipment, package):
+def _clone_package(shipment, package, *, is_courier=False):
+    """A return travels as its own package with its own label, addressed back to
+    whoever sent the original.
+
+    A parcel only carries a delivery place when the return is a courier run, so
+    a returned freight consignment stays a single-stop consignment instead of
+    being read as a multi-drop order needing per-parcel proof.
+    """
     return Package.objects.create(
         organization=shipment.organization,
         shipment=shipment,
@@ -1051,4 +1153,8 @@ def _clone_package(shipment, package):
         declared_value_minor=package.declared_value_minor,
         handling_flags=list(package.handling_flags),
         is_fragile=package.is_fragile,
+        recipient_name=shipment.recipient_name if is_courier else "",
+        recipient_phone=shipment.recipient_phone if is_courier else "",
+        recipient_place=shipment.destination if is_courier else None,
+        chargeable_weight_kg=package.chargeable_weight_kg,
     )

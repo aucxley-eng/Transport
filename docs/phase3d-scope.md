@@ -73,18 +73,19 @@ signature.
 
 ### 5. The plan, not the trip, is where courier drops live — and the drops must fit
 
-A shared van makes many drops, so `propose_consolidation` must build a stop for
+A shared van makes many drops, so `propose_consolidation` builds a stop for
 every distinct parcel drop place rather than only the order's collection and
 destination. That also means the existing single-destination trip gate cannot
 apply to a multi-drop order: the order's `destination` is its final drop, while
 the plan is the authority on the whole sequence.
 
 Two guards make that safe. First, the drop sequence must fit the time the van
-actually has: collection plus every distinct drop costs the existing
-`SERVICE_MINUTES` per stop, and the total must fit inside the trip window and the
-driver's working hours, or the plan is refused naming the overrun. Second, a
-courier order is refused on any trip whose service is a passenger service, so
-parcel work can never ride on a bus's published timetable.
+actually has: collection plus every distinct drop costs `DROP_SERVICE_MINUTES`
+per stop, and the total must fit inside the trip window, or the plan is refused
+naming the overrun. The driver's working day is already gated on the trip's own
+length, which bounds the stops inside it, so it is not checked a second time.
+Second, a courier order is refused on any trip whose service is a passenger
+service, so parcel work can never ride on a bus's published timetable.
 
 ### 6. A return after a failed attempt is a first-class path
 
@@ -126,7 +127,16 @@ manifest, custody, capacity and plan machinery.
 - `Shipment.recipient_name`, `Shipment.recipient_phone` — now optional; freight still refuses a booking without them.
 - `ShipmentEvidence.package` (nullable FK `Package`) — which parcel this evidence is about.
 - `MeasurementBasis.CHARGEABLE_WEIGHT` — the order-level basis when parcels are priced individually, since each parcel may be charged on a different basis.
-- `apps/catalog/tariff.py` — `resolve_rate_card(organization, service)`: the account's own active card, else the platform card, else `None` with the reason. Catalog owns `RateCard`, so catalog resolves it.
+- `apps/catalog/tariff.py` — `resolve_rate_card(organization, service, on=None)`, `weight_bands(card)` and `band_for(bands, kg)`: the account's own active card, else the platform card, else `None` with the reason. Catalog owns `RateCard`, so catalog resolves it.
+
+## Resolved during implementation
+
+Two things the design above left open, settled while building it and covered by tests:
+
+- **`DROP_SERVICE_MINUTES` is 5.** A drop costs the driver a fixed few minutes whatever the parcel weighs, so a courier order is bounded by the clock. The constant is named in `apps/goods/courier.py` and reused by the plan's check rather than hard-coded twice.
+- **An open exception outranks the parcel count, and a return closes it.** Raising a failed attempt moves the order to `exception`, so dispatch sees the problem on the consignment and not only on the parcel. Returning the parcel resolves the exception that sent it back, so a shipment that is no longer waiting for anything does not sit at `exception` forever. Only the failed-attempt family (`failed_attempt` / `refused` / `absent`) is closed by a return; a damage claim raised on the same parcel is a separate decision and stays open. The return also re-derives the original order's status, so an order whose last outstanding parcel was sent back closes instead of waiting on a problem already answered.
+- **3C insertion refuses a multi-drop courier order.** `insertion.py` inserts one consignment with one delivery end, so a courier order would be published onto a plan carrying only its destination — promising fewer stops than the order owes. It is refused by name (`REASON_MULTI_DROP_INSERTION`) rather than half-inserted; a multi-drop order is planned by 3B's proposal path, before the truck leaves. Extending mid-route insertion to multi-drop is a 3C change, not a 3D one.
+- **The trip's own driver may record a parcel handover.** Delivery and a failed attempt are facts about the road, so the driver assigned to a trip carrying the parcel may record them, exactly as 3C lets a trip's driver complete its own stops. Dispatch may always do it; nobody else can.
 
 ## Invariants under test
 
@@ -147,6 +157,8 @@ manifest, custody, capacity and plan machinery.
 15. A failed attempt raises an exception against the parcel, and the parcel is not delivered by being failed at.
 16. A parcel that failed delivery can be returned to the original sender from its own drop, while the rest of the order is left alone.
 17. Cargo weight, volume and compartment limits still count every parcel, and cross-organization access to courier orders is refused.
+18. A multi-drop courier order is refused by name when offered as a mid-route insertion, and the refusal leaves the published plan untouched.
+19. The trip's own driver may record a parcel's delivery or failed attempt; a driver of another trip is refused.
 
 ## API surface
 
@@ -173,6 +185,6 @@ manifest, custody, capacity and plan machinery.
 
 ## Definition of done
 
-- The seventeen invariants above are covered by tests in `apps/goods/tests/test_courier.py`.
+- The nineteen invariants above are covered by tests in `apps/goods/tests/test_courier.py`.
 - Full suite green, `manage.py check` clean, no migration drift, no unused imports.
 - README updated with the 3D API surface and invariants.

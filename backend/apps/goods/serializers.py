@@ -36,6 +36,10 @@ class ShipmentLegSerializer(serializers.ModelSerializer):
 
 
 class PackageSerializer(serializers.ModelSerializer):
+    chargeable_weight_kg = serializers.DecimalField(
+        max_digits=10, decimal_places=3, read_only=True
+    )
+
     class Meta:
         model = Package
         fields = [
@@ -49,9 +53,27 @@ class PackageSerializer(serializers.ModelSerializer):
             "height_cm",
             "volume_m3",
             "volumetric_weight_kg",
+            "chargeable_weight_kg",
             "declared_value_minor",
             "handling_flags",
             "is_fragile",
+            "recipient_name",
+            "recipient_phone",
+            "recipient_place",
+            "agreed_charge_minor",
+            "pricing_snapshot",
+            "status",
+            "current_location",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "label",
+            "volume_m3",
+            "volumetric_weight_kg",
+            "chargeable_weight_kg",
+            "agreed_charge_minor",
+            "pricing_snapshot",
             "status",
             "current_location",
             "created_at",
@@ -99,6 +121,7 @@ class ShipmentEvidenceSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "kind",
+            "package",
             "recipient_name",
             "recipient_id_type",
             "recipient_id_last4",
@@ -141,6 +164,8 @@ class ShipmentSerializer(serializers.ModelSerializer):
         choices=MeasurementBasis.choices, required=False, allow_blank=True
     )
     open_exceptions = serializers.SerializerMethodField()
+    is_multi_drop = serializers.SerializerMethodField()
+    drop_place_names = serializers.SerializerMethodField()
 
     class Meta:
         model = Shipment
@@ -172,6 +197,8 @@ class ShipmentSerializer(serializers.ModelSerializer):
             "is_return",
             "return_of",
             "status",
+            "is_multi_drop",
+            "drop_place_names",
             "load_type",
             "open_exceptions",
             "created_at",
@@ -191,12 +218,34 @@ class ShipmentSerializer(serializers.ModelSerializer):
             "agreed_total_minor",
             "is_return",
             "return_of",
+            "is_multi_drop",
+            "drop_place_names",
             "open_exceptions",
             "created_at",
         ]
 
     def get_open_exceptions(self, obj):
         return obj.exceptions.filter(status=ShipmentException.Status.OPEN).count()
+
+    def get_is_multi_drop(self, obj):
+        return obj.is_multi_drop()
+
+    def get_drop_place_names(self, obj):
+        """The distinct places the van must reach, for a courier order.
+
+        Empty for freight, which is served at its one destination.
+        """
+        if not obj.is_multi_drop():
+            return []
+        # order_by() clears the package model's own ordering, which would
+        # otherwise be added to the SELECT and defeat distinct() — two parcels
+        # for one place would list that place twice.
+        return list(
+            obj.packages.filter(recipient_place__isnull=False)
+            .order_by()
+            .values_list("recipient_place__name", flat=True)
+            .distinct()
+        )
 
 
 class ConsolidationStopSerializer(serializers.ModelSerializer):

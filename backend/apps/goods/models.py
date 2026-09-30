@@ -65,6 +65,9 @@ class MeasurementBasis(models.TextChoices):
     DISTANCE = "distance", "Distance"
     ZONE = "zone", "Zone"
     VEHICLE_CAPACITY = "vehicle_capacity", "Vehicle capacity"
+    # Courier prices each parcel on whichever of actual and volumetric weight is
+    # greater, so the basis of the order is the parcel's chargeable weight.
+    CHARGEABLE_WEIGHT = "chargeable_weight", "Chargeable weight"
 
 
 class LoadType(models.TextChoices):
@@ -106,8 +109,12 @@ class Shipment(BaseModel):
     )
     sender_name = models.CharField(max_length=160)
     sender_phone = models.CharField(max_length=32)
-    recipient_name = models.CharField(max_length=160)
-    recipient_phone = models.CharField(max_length=32)
+    # A single-consignee consignment names its recipient here. A courier order
+    # cannot: one pickup may carry parcels for several people, so the parcels
+    # name their own recipients and these stay blank. Freight still refuses a
+    # booking without a named consignee.
+    recipient_name = models.CharField(max_length=160, blank=True)
+    recipient_phone = models.CharField(max_length=32, blank=True)
 
     collection = models.ForeignKey(
         Place, on_delete=models.PROTECT, related_name="collections"
@@ -173,7 +180,16 @@ class Shipment(BaseModel):
         indexes = [models.Index(fields=["organization", "status", "service_window_start"])]
 
     def __str__(self):
-        return f"{self.reference} {self.sender_name} -> {self.recipient_name}"
+        return f"{self.reference} {self.sender_name} -> {self.recipient_name or 'parcels'}"
+
+    def is_multi_drop(self):
+        """Whether this consignment names its recipients on the parcels.
+
+        A courier order does, because it has several: one pickup, many parcels,
+        many recipients. A freight consignment does not, because it has exactly
+        one consignee named on the order itself.
+        """
+        return self.packages.filter(recipient_place__isnull=False).exists()
 
 
 class Package(BaseModel):
@@ -206,6 +222,20 @@ class Package(BaseModel):
     declared_value_minor = models.PositiveBigIntegerField(default=0)
     handling_flags = models.JSONField(default=list, blank=True)
     is_fragile = models.BooleanField(default=False)
+    # Courier: the parcel, not the order, names the person it is for. Freight
+    # leaves these blank and keeps its single order-level consignee.
+    recipient_name = models.CharField(max_length=160, blank=True)
+    recipient_phone = models.CharField(max_length=32, blank=True)
+    recipient_place = models.ForeignKey(
+        Place, null=True, blank=True, on_delete=models.PROTECT, related_name="parcel_drops"
+    )
+    # What this parcel is charged, and on what basis, frozen at booking so a
+    # later rate-card edit cannot rewrite a booked order.
+    chargeable_weight_kg = models.DecimalField(
+        max_digits=10, decimal_places=3, default=0
+    )
+    agreed_charge_minor = models.PositiveBigIntegerField(default=0)
+    pricing_snapshot = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True
     )
@@ -217,10 +247,22 @@ class Package(BaseModel):
 
     class Meta:
         ordering = ["shipment_id", "label"]
-        indexes = [models.Index(fields=["shipment", "status"])]
+        indexes = [
+            models.Index(fields=["shipment", "status"]),
+            models.Index(fields=["recipient_place"]),
+        ]
 
     def __str__(self):
         return f"{self.label} ({self.status})"
+
+    def is_multi_drop(self):
+        """Whether this parcel is delivered on its own, to its own recipient."""
+        return bool(self.recipient_name or self.recipient_place_id)
+
+    def chargeable_weight(self):
+        """The weight this parcel is charged on: the greater of its actual mass
+        and its volumetric weight, so a light bulky box pays for its size."""
+        return max(self.weight_kg, self.volumetric_weight_kg)
 
     def measure(self, save=True):
         """Derive volume and volumetric weight from dimensions."""
@@ -538,6 +580,11 @@ class ShipmentEvidence(BaseModel):
     shipment = models.ForeignKey(
         Shipment, on_delete=models.CASCADE, related_name="evidence"
     )
+    # A multi-recipient order is delivered parcel by parcel, so its evidence
+    # says which parcel it is about. Single-consignee evidence leaves it blank.
+    package = models.ForeignKey(
+        Package, null=True, blank=True, on_delete=models.CASCADE, related_name="evidence"
+    )
     kind = models.CharField(max_length=12, choices=Kind.choices)
     # Recipient verification for delivery. A photo sets none of these.
     recipient_name = models.CharField(max_length=160, blank=True)
@@ -557,10 +604,14 @@ class ShipmentEvidence(BaseModel):
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["shipment", "kind"])]
+        indexes = [
+            models.Index(fields=["shipment", "kind"]),
+            models.Index(fields=["package", "kind"]),
+        ]
 
     def __str__(self):
-        return f"{self.kind} evidence for {self.shipment.reference}"
+        target = f" for {self.package.label}" if self.package_id else ""
+        return f"{self.kind} evidence{target} on {self.shipment.reference}"
 
     def is_recipient_verified(self):
         """A photo alone is never proof; a name with an identity check, an OTP,

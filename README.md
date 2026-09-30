@@ -6,15 +6,15 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 ## Status
 
-Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and freight Envelopes 3A, 3B and 3C (booking and custody, consolidated shared load with the coverage floor and backhaul, then mid-route insertion) are implemented and green:
+Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and goods Envelopes 3A, 3B, 3C and 3D (booking and custody, consolidated shared load with the coverage floor and backhaul, mid-route insertion, then local courier) are implemented and green:
 
 | Component | State |
 |---|---|
 | `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
 | `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
 | `infra/` | Empty. |
-| Tests | 305 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, and frozen prices under insertion. |
-| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3C of §9–10 are delivered. Remaining: courier/parcel, warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
+| Tests | 369 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, frozen prices under insertion, and the nineteen courier invariants (per-parcel weight-band pricing, account rate-card resolution, per-parcel delivery proof, partial delivery, returns after a failed attempt, the mid-route insertion gate, and driver handovers). |
+| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3D of §9–10 are delivered. Remaining: intercity parcel hubs, warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
 
 ## Repository layout
 
@@ -25,7 +25,8 @@ Transport/
 ├── backend/                                         # API server (Django + DRF)
 │   ├── manage.py
 │   ├── config/settings/  (base, development, production, test)
-│   └── requirements/     (base, development, production)
+│   ├── requirements/     (base, development, production)
+│   └── tools/            (courier_smoke.py — real-HTTP end-to-end check, unused_imports.py)
 ├── frontend/                                        # Client applications
 │   └── src/  (api, context, pages, components, utils)
 └── infra/                                           # Infrastructure definitions (planned)
@@ -44,7 +45,7 @@ Transport/
 1. **Discovery and design** – operating model, service catalog, data rules, integration access.
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
 3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(implemented: scheduled booking core, Envelope 2A on-demand rides, Envelope 2B corporate shuttles, Envelope 2C charter/hire)*
-4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Envelope 3C implemented: mid-route insertion that preserves completed stops, holds to a configured delay tolerance, and the driver-offer and manifest-amendment paths. Courier/parcel and warehouse inventory remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md), [`docs/phase3b-scope.md`](./docs/phase3b-scope.md) and [`docs/phase3c-scope.md`](./docs/phase3c-scope.md))*
+4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Envelope 3C implemented: mid-route insertion that preserves completed stops, holds to a configured delay tolerance, and the driver-offer and manifest-amendment paths. Envelope 3D implemented: local courier with one pickup and many parcels, priced per parcel on weight bands and proved per parcel. Intercity parcel hubs and warehouse inventory remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md), [`docs/phase3b-scope.md`](./docs/phase3b-scope.md), [`docs/phase3c-scope.md`](./docs/phase3c-scope.md) and [`docs/phase3d-scope.md`](./docs/phase3d-scope.md))*
 5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
 
@@ -243,6 +244,33 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **The manifest is amended, not edited**: a mid-route pickup publishes a new manifest version that still requires reconciliation and re-release, and the previous released version stays readable.
 - **Every refusal explains itself**, in the API response and on the stored request, so unassigned work stays visible.
 
+### Envelope 3D API surface (local courier, one pickup and many recipients)
+
+| Area | Endpoints |
+|---|---|
+| Courier quoting | `POST /api/v1/shipments/courier-quote/` — per-parcel breakdown against the resolved rate card |
+| Courier booking | `POST /api/v1/shipments/` with a courier quote — one collection, N parcels |
+| Rate cards | `/api/v1/rate-cards/` — now load-bearing rather than descriptive |
+| Per-parcel delivery | `POST /api/v1/packages/{id}/deliver/` |
+| Failed attempt | `POST /api/v1/packages/{id}/failed-attempt/`, or `POST /api/v1/shipments/{id}/exceptions/` with a `package` |
+| Per-parcel evidence | `POST /api/v1/shipments/{id}/evidence/` with a `package` |
+| Returns | `POST /api/v1/shipments/{id}/return/` with the parcels to reverse |
+
+### Envelope 3D invariants enforced
+
+- **The parcel is the delivery unit**: a courier order is one pickup and many parcels, and each parcel names its own recipient and drop place. The order-level consignee became optional for that reason, and freight still refuses a booking without one. A parcel missing its recipient or its place is refused by position, so a sender fixing a five-parcel order knows which one was wrong.
+- **Each parcel is charged on chargeable weight** — the greater of its actual mass and its volumetric weight at 4000 cm³/kg — against a weight-band rate card, and the basis that priced it is frozen on the parcel at booking.
+- **A parcel outside every band is refused, not priced at the nearest band**, and an account with no card in force is refused with an explanation rather than quoted at zero. Guessing a price is how a courier company loses money quietly.
+- **The account's own rate card wins** over the platform card, and a later rate-card edit changes neither an accepted quote nor a booked order's money.
+- **The order total is exactly the sum of the per-parcel charges**, so the two can never disagree.
+- **The plan, not the trip, sequences the drops**: a stop for every distinct parcel place, and a route of drops that will not fit the trip window is refused naming the overrun. Freight keeps its single-destination gate.
+- **Passenger and goods operations stay separate**: goods work is refused on any trip whose service is a passenger service, so a parcel route can never ride a bus's published timetable.
+- **Delivery is proved per parcel, to the named recipient**: a photo alone is refused, and so is proof from anyone other than that parcel's recipient. The check is on the name, not on the presence of a signature.
+- **Partial delivery stays visible**: delivering one parcel moves the order to `partially_delivered` with the rest outstanding; only when every parcel is settled does the order close. A failed attempt raises an exception against the parcel and leaves it undelivered.
+- **A failed parcel can be returned on its own**, collected from that parcel's own drop rather than the order's destination, with the rest of the order left alone. The failed-attempt exception that sent it back is closed by the return — a damage claim on the same parcel is a separate decision and stays open — and the original order's status is re-derived, so it does not sit at `exception` waiting on a problem already answered.
+- **A multi-drop courier order is refused by name as a mid-route insertion.** 3C inserts one consignment with one delivery end, so inserting a multi-drop order would publish a plan carrying only its destination. It is planned by the proposal path instead, before the truck leaves.
+- **The trip's own driver may record a parcel's delivery or failed attempt**, exactly as 3C lets a trip's driver complete its own stops; a driver of another trip is refused.
+- **Money is quoted and frozen here, collected in step 5**: prepaid, cash on delivery and account billing need an order-to-shipment link and remain roadmap step 5's work.
 
 ## Environment variables
 

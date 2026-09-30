@@ -33,9 +33,17 @@ class ShipmentAdmin(admin.ModelAdmin):
 
 @admin.register(Package)
 class PackageAdmin(admin.ModelAdmin):
-    list_display = ["label", "shipment", "weight_kg", "status"]
-    list_filter = ["status", "is_fragile", "organization"]
-    search_fields = ["label"]
+    list_display = [
+        "label",
+        "shipment",
+        "weight_kg",
+        "chargeable_weight_kg",
+        "recipient_name",
+        "recipient_place",
+        "status",
+    ]
+    list_filter = ["status", "is_fragile", "recipient_place", "organization"]
+    search_fields = ["label", "recipient_name"]
 
 
 @admin.register(FreightTrip)
@@ -89,13 +97,13 @@ class CustodyEventAdmin(admin.ModelAdmin):
 
 @admin.register(ShipmentEvidence)
 class ShipmentEvidenceAdmin(admin.ModelAdmin):
-    list_display = ["shipment", "kind", "otp_verified", "signature_ref", "created_at"]
+    list_display = ["shipment", "package", "kind", "otp_verified", "signature_ref", "created_at"]
     list_filter = ["kind", "organization"]
 
 
 @admin.register(ShipmentException)
 class ShipmentExceptionAdmin(admin.ModelAdmin):
-    list_display = ["shipment", "kind", "next_action", "status", "created_at"]
+    list_display = ["shipment", "package", "kind", "next_action", "status", "created_at"]
     list_filter = ["kind", "next_action", "status", "organization"]
 
 
