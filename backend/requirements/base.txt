@@ -1,8 +1,8 @@
 Django>=6.0,<7.0
 djangorestframework>=3.16,<4.0
-djangorestframework-simplejwt>=6.0,<7.0
+djangorestframework-simplejwt>=5.5,<6.0
 django-cors-headers>=4.3,<5.0
-django-filter>=25.1,<26.0
+django-filter>=26.1,<27.0
 drf-spectacular>=0.28,<1.0
 Pillow>=11.0,<13.0
 python-dotenv>=1.0,<2.0

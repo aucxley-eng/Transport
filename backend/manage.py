@@ -6,7 +6,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
+BACKEND_DIR = Path(__file__).parent
+# .env.example sits at the repository root, so the root file is read first;
+# backend/.env is then read second and wins, which keeps a machine-local override
+# working without either file being committed.
+load_dotenv(BACKEND_DIR.parent / ".env")
+load_dotenv(BACKEND_DIR / ".env")
 
 
 def main():

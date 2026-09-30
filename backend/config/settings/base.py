@@ -90,6 +90,11 @@ if os.environ.get("DB_ENGINE"):
             "CONN_HEALTH_CHECKS": True,
             "OPTIONS": {
                 "connect_timeout": int(os.environ.get("DB_CONNECT_TIMEOUT", "10")),
+                # Managed PostgreSQL wants TLS. psycopg defaults to "prefer",
+                # which silently accepts a plaintext server, so the mode is
+                # stated rather than assumed. "require" is the right default for
+                # a hosted database; a local one can be given "prefer".
+                "sslmode": os.environ.get("DB_SSLMODE", "require"),
             },
         }
     }

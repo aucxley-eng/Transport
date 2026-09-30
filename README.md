@@ -274,13 +274,49 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ## Environment variables
 
-See [`.env.example`](./.env.example) for the full template:
+See [`.env.example`](./.env.example) for the full template. Copy it to `.env` at
+the repository root; `manage.py` reads the root file first and `backend/.env`
+second, so a machine-local override still works.
 
 - `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`
 - `FRONTEND_URL`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS`
-- Database overrides: `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
+- Database overrides: `DB_ENGINE`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_CONN_MAX_AGE`, `DB_CONNECT_TIMEOUT`, `DB_SSLMODE`
 
 Never commit real secrets; `.env` is git-ignored.
+
+Omit `DB_ENGINE` and the backend runs on a local SQLite file. Set it and it runs
+on PostgreSQL.
+
+### Connecting to Supabase
+
+Use the **session pooler** on port 5432, not the direct host and not the
+transaction pooler:
+
+- The direct host `db.<ref>.supabase.co` resolves to an IPv6-only address in
+  several regions and fails with `Network is unreachable` from a machine without
+  an IPv6 route. `python3 tools/db_probe.py <host>` reports the address family
+  and whether anything answers, without authenticating.
+- The transaction pooler (port 6543) does not support the prepared statements
+  Django and psycopg use, so it breaks transactions rather than merely being
+  slower.
+- `DB_SSLMODE` defaults to `require`, because psycopg's own default (`prefer`)
+  will happily accept a plaintext server.
+
+### Running the tests
+
+The suite always runs on an in-memory SQLite database, whatever `DB_ENGINE` says.
+`config/settings/test.py` pins the engine deliberately: with production
+credentials in `.env`, the test runner would otherwise create `test_postgres` on
+the hosted database. `apps/common/tests/test_settings.py` fails if that pin is
+ever dropped.
+
+```bash
+cd backend
+python3 -m virtualenv .venv          # or: python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements/development.txt
+.venv/bin/python manage.py test --settings=config.settings.test
+.venv/bin/python tools/courier_smoke.py    # the courier loop over real HTTP
+```
 
 ## Contributing
 
