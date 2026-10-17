@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Incremental compiler state (TypeScript `--build` / project references)
+*.tsbuildinfo
+
+# Environment — the frontend talks to the API through the dev proxy, so there
+# are no secrets here, but a local override still should not be committed.
+.env
+.env.local
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.swp
+
+# Logs
+*.log
+npm-debug.log*

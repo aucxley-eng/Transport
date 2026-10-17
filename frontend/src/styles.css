@@ -1,0 +1,325 @@
+/*
+ * A single stylesheet, no framework.
+ *
+ * The dashboard is a small, dense, internal tool; a component library would be
+ * more dependency than it is worth, and Tailwind would mean a build step and a
+ * class vocabulary that says nothing about this domain. Plain CSS with custom
+ * properties keeps the whole visual language in one readable file.
+ */
+
+:root {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-raised: #1e222b;
+  --border: #2a2f3a;
+  --text: #e6e8ee;
+  --text-muted: #9aa3b2;
+  --accent: #3b82f6;
+  --accent-hover: #2f6fd8;
+  --danger: #ef4444;
+  --danger-bg: #2a1618;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Layout shell ------------------------------------------------------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: 224px 1fr;
+  min-height: 100%;
+}
+
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 4px;
+}
+
+.sidebar__brand {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 8px 10px 16px;
+  color: var(--text);
+}
+
+.sidebar__section {
+  margin-top: 12px;
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.nav-item {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.nav-item:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.nav-item--active {
+  background: var(--surface-raised);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.sidebar__footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.who {
+  padding: 0 10px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.who strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.main {
+  overflow: auto;
+}
+
+.topbar {
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.topbar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.content {
+  padding: 24px;
+}
+
+/* --- Elements ----------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+label.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+label.field span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+input[type="text"],
+input[type="tel"],
+input[type="password"],
+input[type="email"],
+select {
+  width: 100%;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  padding: 9px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  text-align: left;
+}
+
+button.link:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.alert {
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: #fecaca;
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* --- Auth screen -------------------------------------------------------- */
+
+.auth {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth__panel {
+  width: 100%;
+  max-width: 340px;
+}
+
+.auth__panel h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+
+.auth__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 20px;
+}
+
+.auth__submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* --- Centred status (loading / empty) ---------------------------------- */
+
+.centred {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  color: var(--text-muted);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
