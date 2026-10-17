@@ -6,6 +6,7 @@ a way the suite could do real damage to a machine it was not given.
 
 from django.conf import settings
 from django.test import SimpleTestCase
+from unittest.case import SkipTest
 
 
 class TestDatabaseIsAlwaysLocalTestCase(SimpleTestCase):
@@ -17,7 +18,20 @@ class TestDatabaseIsAlwaysLocalTestCase(SimpleTestCase):
     `test_postgres` and leaves it behind if the run is interrupted. Pinning the
     engine in the test settings is what prevents that, and this is what notices if
     the pin is ever dropped.
+
+    The assertions describe `config.settings.test`. They are skipped under
+    `config.settings.test_postgres`, which is the one opt-in way to run the suite
+    on a server -- without the skip, deliberately running on PostgreSQL would read
+    as a failure and invite removing the pin that makes the default run safe.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if getattr(settings, "TESTING_ON_POSTGRESQL", False):
+            raise SkipTest(
+                "SQLite-only guard; the run is opted into PostgreSQL explicitly."
+            )
 
     def test_the_suite_runs_on_sqlite_regardless_of_the_environment(self):
         self.assertEqual(
