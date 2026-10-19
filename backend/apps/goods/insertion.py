@@ -48,6 +48,7 @@ from apps.goods.models import (
     ManifestLine,
     PlanShipment,
     Shipment,
+    ShipmentLeg,
 )
 from apps.goods.services import cargo_capacity
 
@@ -293,7 +294,13 @@ def _insertion_refusal(*, organization, trip, shipment, grace):
         return REASON_TRIP_NOT_RUNNING
     if shipment.status in (Shipment.Status.CANCELLED, Shipment.Status.DELIVERED):
         return REASON_SHIPMENT_CLOSED
-    if shipment.legs.filter(status__in=["assigned", "loaded", "in_transit"]).exists():
+    if shipment.legs.filter(
+        status__in=(
+            ShipmentLeg.Status.LOADED,
+            ShipmentLeg.Status.DEPARTED,
+            ShipmentLeg.Status.COMPLETED,
+        )
+    ).exists():
         return REASON_SHIPMENT_MOVING
     if plan_exists_with_shipment(trip, shipment):
         return REASON_ALREADY_INSERTED

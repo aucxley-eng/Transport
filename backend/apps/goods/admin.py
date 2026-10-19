@@ -111,7 +111,7 @@ class ShipmentExceptionAdmin(admin.ModelAdmin):
 class ConsolidationPlanAdmin(admin.ModelAdmin):
     list_display = ["trip", "version", "status", "change_reason", "published_at"]
     list_filter = ["status", "organization"]
-    search_fields = ["trip__reference"]
+    search_fields = ["trip__vehicle__registration_number", "change_reason", "explanation"]
 
 
 @admin.register(ConsolidationStop)
@@ -141,7 +141,7 @@ class InsertionRequestAdmin(admin.ModelAdmin):
         "decided_at",
     ]
     list_filter = ["status", "organization"]
-    search_fields = ["shipment__reference", "trip__reference"]
+    search_fields = ["shipment__reference", "trip__vehicle__registration_number"]
 
 
 @admin.register(PlanShipment)

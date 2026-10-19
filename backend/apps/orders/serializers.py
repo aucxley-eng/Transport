@@ -6,8 +6,10 @@ from apps.orders.models import Order
 
 
 class OrderCreateSerializer(serializers.Serializer):
+    # Currency is never accepted from the client: the quote is the frozen
+    # commercial truth, and letting a caller relabel money would propagate a
+    # false unit into the payment attempt and the ledger.
     quote = serializers.UUIDField()
-    currency = serializers.CharField(max_length=3, default="KES")
     service_detail = serializers.JSONField(default=dict)
 
     def validate_quote(self, value):
@@ -36,7 +38,7 @@ class OrderCreateSerializer(serializers.Serializer):
             customer=validated_data["customer"],
             service=quote.service,
             quote=quote,
-            currency=validated_data.get("currency", quote.currency),
+            currency=quote.currency,
             total_minor=quote.total_minor,
             service_detail=validated_data.get("service_detail", {}),
         )

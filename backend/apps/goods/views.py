@@ -1013,16 +1013,42 @@ class ManifestViewSet(
 
 
 def _organization_for(request, fallback_id):
-    """The organization a write targets: the request body, else the caller's
-    only membership, else the fallback from an existing record."""
+    """The organization a write targets: the request body, else the fallback
+    from an existing record, else the caller's only membership.
+
+    Never returns None. An identifier that resolves to nothing, or that names
+    an organization the caller cannot reach, is a bad request — reporting it
+    here keeps a 400 from travelling through the view as a 500, and stops a
+    caller from aiming a write at an organization they have no standing in.
+    """
+    from django.db.models import Q
+    from rest_framework.exceptions import ValidationError as BadRequest
+
     from apps.accounts.models import Organization
 
+    user = request.user
+    org_ids = organization_ids_for(user)
+    if user and user.is_superuser:
+        candidates = Organization.objects.all()
+    else:
+        candidates = Organization.objects.filter(Q(pk__in=org_ids) | Q(parent_id__in=org_ids))
+
     requested = request.data.get("organization")
-    if requested:
-        return Organization.objects.filter(pk=requested).first()
-    if fallback_id:
-        return Organization.objects.filter(pk=fallback_id).first()
-    org_ids = list(organization_ids_for(request.user))
-    if len(org_ids) == 1:
-        return Organization.objects.filter(pk=org_ids[0]).first()
-    return None
+    fallback = requested or fallback_id
+    if not fallback:
+        if len(org_ids) != 1:
+            raise BadRequest(
+                {
+                    "organization": "An organization must be named for this write, "
+                    "when the caller belongs to more than one."
+                }
+            )
+        fallback = org_ids[0]
+
+    try:
+        organization = candidates.filter(pk=fallback).first()
+    except (TypeError, ValueError, ValidationError):
+        organization = None
+    if organization is None:
+        raise BadRequest({"organization": "Not a known organization for this caller."})
+    return organization

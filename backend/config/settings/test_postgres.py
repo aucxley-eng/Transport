@@ -16,6 +16,8 @@ suite is refused outright if the host looks unconfigured, so a placeholder
 cannot turn into a confusing DNS error halfway through.
 """
 
+from django.core.exceptions import ImproperlyConfigured
+
 from config.settings.test import *  # noqa: F401,F403
 
 TESTING_ON_POSTGRESQL = True

@@ -1277,3 +1277,47 @@ class GoodsApiTestCase(GoodsFixture):
     def test_anonymous_access_is_rejected(self):
         response = APIClient().get("/api/v1/shipments/")
         self.assertIn(response.status_code, (401, 403))
+
+
+class OrganizationResolutionTestCase(GoodsApiTestCase):
+    """An organization that cannot be named is a 400, never a None to
+    dereference (the write target must always resolve or refuse)."""
+
+    def setUp(self):
+        super().setUp()
+
+    def test_a_multi_org_caller_must_name_the_target(self):
+        Membership.objects.create(
+            user=self.staff,
+            organization=Organization.objects.create(name="Second", slug="second"),
+            role=Role.DISPATCHER,
+        )
+        payload = self._quote_payload()
+        del payload["organization"]
+        response = self.staff_client.post("/api/v1/shipments/quote/", payload, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("organization", response.data)
+
+    def test_naming_an_organization_this_caller_cannot_reach_is_refused(self):
+        stranger = Organization.objects.create(name="Stranger", slug="stranger")
+        response = self.staff_client.post(
+            "/api/v1/shipments/quote/",
+            self._quote_payload(organization=str(stranger.pk)),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("organization", response.data)
+
+    def test_a_body_organization_that_is_not_an_id_is_a_bad_request(self):
+        response = self.staff_client.post(
+            "/api/v1/shipments/quote/",
+            self._quote_payload(organization="not-a-uuid"),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_the_callers_only_membership_is_used_when_the_body_omits_it(self):
+        payload = self._quote_payload()
+        del payload["organization"]
+        response = self.staff_client.post("/api/v1/shipments/quote/", payload, format="json")
+        self.assertEqual(response.status_code, 201, response.data)

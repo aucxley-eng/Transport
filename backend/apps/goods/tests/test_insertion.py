@@ -30,6 +30,7 @@ from apps.goods.insertion import (
     REASON_OTHER_DRIVER,
     REASON_TOO_HEAVY,
     REASON_TOLERANCE_EXCEEDED,
+    REASON_SHIPMENT_MOVING,
     REASON_TRIP_NOT_RUNNING,
     REASON_WINDOW_PASSED,
     REASON_WRONG_DESTINATION,
@@ -51,6 +52,7 @@ from apps.goods.models import (
     Manifest,
     ManifestLine,
     Shipment,
+    ShipmentLeg,
 )
 from apps.goods.services import (
     build_manifest,
@@ -1048,3 +1050,71 @@ class InsertionApiTestCase(RunningTripFixture):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data["version"], 2)
         self.assertEqual(response.data["status"], Manifest.Status.DRAFT)
+
+
+class ShipmentAlreadyOnATripTestCase(RunningTripFixture):
+    """A consignment whose leg has moved is refused by name.
+
+    The refusal used to list statuses the model has never carried, so it
+    matched nothing: a shipment already loaded onto a truck sailed past this
+    check and was offered for a second one.
+    """
+
+    def _refusal(self, shipment, trip):
+        with self.assertRaises(FreightError) as ctx:
+            request_insertion(
+                organization=self.org,
+                trip=trip,
+                shipment=shipment,
+                requested_by=self.dispatcher,
+            )
+        return str(ctx.exception)
+
+    def _trip_and_shipment(self):
+        trip, _plan, (a, _b) = self._running_trip()
+        # The fixture's own legs were marked LOADED when the manifest was
+        # scanned, which would make every case below pass for the wrong reason.
+        # Park them so each assertion is about the leg this test creates.
+        a.legs.update(status=ShipmentLeg.Status.PLANNED)
+        return trip, a
+
+    def test_a_leg_already_loaded_stops_the_insertion(self):
+        trip, shipment = self._trip_and_shipment()
+        shipment.legs.create(
+            organization=self.org,
+            stop=self.market,
+            sequence=9,
+            status=ShipmentLeg.Status.LOADED
+        )
+        self.assertEqual(self._refusal(shipment, trip), REASON_SHIPMENT_MOVING)
+
+    def test_a_leg_already_departed_stops_the_insertion(self):
+        trip, shipment = self._trip_and_shipment()
+        shipment.legs.create(
+            organization=self.org,
+            stop=self.market,
+            sequence=9,
+            status=ShipmentLeg.Status.DEPARTED
+        )
+        self.assertEqual(self._refusal(shipment, trip), REASON_SHIPMENT_MOVING)
+
+    def test_a_leg_already_completed_stops_the_insertion(self):
+        trip, shipment = self._trip_and_shipment()
+        shipment.legs.create(
+            organization=self.org,
+            stop=self.market,
+            sequence=9,
+            status=ShipmentLeg.Status.COMPLETED
+        )
+        self.assertEqual(self._refusal(shipment, trip), REASON_SHIPMENT_MOVING)
+
+    def test_a_leg_that_has_not_moved_does_not_stop_the_insertion(self):
+        # Guards against the opposite mistake: over-matching on every leg.
+        trip, shipment = self._trip_and_shipment()
+        shipment.legs.create(
+            organization=self.org,
+            stop=self.market,
+            sequence=9,
+            status=ShipmentLeg.Status.PLANNED
+        )
+        self.assertEqual(self._refusal(shipment, trip), REASON_ALREADY_INSERTED)

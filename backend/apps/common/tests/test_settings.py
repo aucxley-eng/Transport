@@ -48,3 +48,53 @@ class TestDatabaseIsAlwaysLocalTestCase(SimpleTestCase):
         # Django overrides NAME for SQLite tests, so nothing is written to disk and
         # no stray test-db.sqlite3 is left behind by an interrupted run.
         self.assertIn("mode=memory", settings.DATABASES["default"]["NAME"])
+
+
+class PostgresOptInGuardTestCase(SimpleTestCase):
+    """`config.settings.test_postgres` must refuse an unconfigured host.
+
+    The guard raises before Django builds a connection, so this exercises the
+    real file rather than a copy of its logic: a guard written without its
+    exception imported raises NameError on load and reads as a crash in the
+    settings package instead of a sentence telling you what to do.
+    """
+
+    def test_an_unconfigured_host_is_refused_by_name(self):
+        from pathlib import Path
+        from unittest import mock
+
+        import os
+
+        from django.core.exceptions import ImproperlyConfigured
+
+        from config.settings import test as test_settings
+
+        path = Path(test_settings.__file__).with_name("test_postgres.py")
+        source = path.read_text(encoding="utf-8")
+        namespace = {"__file__": str(path), "__name__": "config.settings.test_postgres"}
+
+        with mock.patch.dict(os.environ, {"DB_HOST": ""}):
+            with self.assertRaises(ImproperlyConfigured) as raised:
+                exec(compile(source, str(path), "exec"), namespace)  # noqa: S102
+
+        message = str(raised.exception)
+        self.assertIn("DB_HOST", message)
+        self.assertIn("config.settings.test_postgres", message)
+
+    def test_a_placeholder_host_is_refused_too(self):
+        from pathlib import Path
+        from unittest import mock
+
+        import os
+
+        from django.core.exceptions import ImproperlyConfigured
+
+        from config.settings import test as test_settings
+
+        path = Path(test_settings.__file__).with_name("test_postgres.py")
+        source = path.read_text(encoding="utf-8")
+        namespace = {"__file__": str(path), "__name__": "config.settings.test_postgres"}
+
+        with mock.patch.dict(os.environ, {"DB_HOST": "REPLACE-WITH-YOUR-HOST"}):
+            with self.assertRaises(ImproperlyConfigured):
+                exec(compile(source, str(path), "exec"), namespace)  # noqa: S102
