@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.db.models import Q
 
 from apps.common.models import BaseModel, OrganizationScopedQuerySet
 
@@ -52,9 +53,18 @@ class PaymentAttempt(BaseModel):
                 fields=["provider", "idempotency_key"],
                 name="uq_paymentattempt_provider_key",
             ),
-        ]
-        indexes = [
-            models.Index(fields=["provider", "provider_reference"]),
+            # A provider reference names one collection, so it is unique rather
+            # than merely indexed: two attempts carrying the same reference
+            # would let a single provider callback be matched to an arbitrary
+            # one of them and applied again. NULL and empty stay exempt, since
+            # an attempt is routinely created before the provider has handed a
+            # reference back.
+            models.UniqueConstraint(
+                fields=["provider", "provider_reference"],
+                condition=Q(provider_reference__isnull=False)
+                & ~Q(provider_reference=""),
+                name="uq_paymentattempt_provider_ref",
+            ),
         ]
 
     def __str__(self):

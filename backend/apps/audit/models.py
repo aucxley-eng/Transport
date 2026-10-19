@@ -57,7 +57,22 @@ def record_audit(
     correlation_id=None,
     ip_address=None,
 ):
-    """Best-effort audit recording; never allowed to break the caller's work."""
+    """Record an audit event, committed with the caller's work.
+
+    This is deliberately transactional rather than best effort. An audit event
+    that is written while its own transaction later fails is a lie about what
+    happened, and an audit event silently dropped under load is a hole in the
+    trail an auditor is asked to trust. So a failure here fails the caller too:
+    no action is recorded as done unless the record of the action commits.
+
+    That is safe for callers holding money or custody because their risky work
+    is isolated on its own savepoint first (see payments.services
+    ``_issue_booking_tickets``), which is what lets a refused business
+    operation write an audit record without dragging a completed collection
+    back with it.
+
+    Corrections must be NEW events with a reason; recorded history is never
+    edited or deleted."""
     kwargs = {
         "actor": actor,
         "organization": organization,

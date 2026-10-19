@@ -112,8 +112,12 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
     except ProviderError as exc:
         raise PaymentError(str(exc))
 
-    attempts = PaymentAttempt.objects.filter(provider=provider_slug, provider_reference=ref)
-    if not attempts.exists():
+    # Lookup by provider reference, the one field that ties a provider's
+    # result back to an attempt. Refusing anything unmatched or ambiguous is
+    # what keeps a callback from being applied to an attempt nobody intended.
+    try:
+        attempt = PaymentAttempt.objects.get(provider=provider_slug, provider_reference=ref)
+    except PaymentAttempt.DoesNotExist:
         record_audit(
             actor=actor,
             action="payment.callback_unmatched",
@@ -122,8 +126,19 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
             new_value={"provider": provider_slug, "provider_reference": ref},
         )
         raise PaymentError("Unmatched provider callback.")
-
-    attempt = attempts.first()
+    except PaymentAttempt.MultipleObjectsReturned:
+        # The unique constraint on (provider, provider_reference) makes this
+        # unreachable in normal operation. If it is ever reached the data no
+        # longer says which collection the provider means, so the callback is
+        # refused instead of applied to an arbitrary attempt.
+        record_audit(
+            actor=actor,
+            action="payment.callback_ambiguous",
+            entity_type="payment_attempt",
+            reason="Provider reference matches more than one attempt.",
+            new_value={"provider": provider_slug, "provider_reference": ref},
+        )
+        raise PaymentError("Provider reference matches more than one attempt.")
     if attempt.is_terminal():
         # Stale or duplicate callback: no second business effect.
         return attempt, False
@@ -155,6 +170,12 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
         attempt.save(update_fields=["state", "provider_payload", "result_received", "updated_at"])
         if new_state == PaymentAttempt.State.SUCCESS:
             _post_collection(attempt)
+            # Money received means the purchase stands. The order leaves
+            # "created" for "confirmed" in the same transaction as the ledger
+            # postings, so an order is confirmed if and only if it was
+            # collected, and a rolled-back callback leaves no confirmed order
+            # behind (blueprint 1, 13).
+            _confirm_order(attempt.order)
             # Seat availability and payment success are evaluated together
             # before a confirmed ticket is issued (blueprint 7). This runs in
             # the same transaction as the ledger postings: the ticket exists if
@@ -175,6 +196,24 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
     attempt.provider_payload = payload
     attempt.save(update_fields=["provider_payload", "updated_at"])
     return attempt, True
+
+
+def _confirm_order(order):
+    """Move a paid order out of "created" when its collection succeeds.
+
+    Guarded on the current status rather than on the terminal-callback check
+    alone, so even a callback path that reached here twice could not confirm a
+    second time. An order that needs no payment has no successful collection
+    to arrive here on; it is confirmed through its own path, so this does not
+    inspect ``is_payment_required``.
+
+    A confirmed order with no ticket is not a contradiction: that is the case
+    where the seat hold lapsed, and it is exactly what the refund/rebook
+    exception below owes the customer.
+    """
+    if order is None or order.status != Order.Status.CREATED:
+        return
+    order.confirm()
 
 
 def _post_collection(attempt):
@@ -223,15 +262,30 @@ def _issue_booking_tickets(attempt):
     if order is None:
         return []
 
+    # A failure here must not cost us the collection: the money has already
+    # left the customer's wallet, and the ledger entry saying so has to commit
+    # (blueprint 7's rule is that the collection is recorded even when no seat
+    # can be honoured, so a refund can be owed against it rather than lost).
+    #
+    # The booking work therefore runs on a SAVEPOINT of this callback's
+    # transaction. A failure inside it -- critically including a database
+    # error, which poisons the surrounding transaction -- is rolled back on its
+    # own while the outer block stays usable. Without that isolation the audit
+    # record below would be the first statement executed against an aborted
+    # transaction, would raise "current transaction is aborted", and would take
+    # the collection down with it: the precise outcome the original comment
+    # promised to prevent.
     try:
-        tickets, expired_holds = issue_ticket_for_order(order)
-    except Exception:  # never let booking break the collection record
+        with transaction.atomic():
+            tickets, expired_holds = issue_ticket_for_order(order)
+    except Exception as exc:
         record_audit(
             organization=attempt.organization,
             action="payment.ticket_issue_failed",
             entity_type="order",
             entity_id=order.pk,
             reason="Seat hold could not be converted to a ticket.",
+            new_value={"error": type(exc).__name__, "detail": str(exc)[:200]},
         )
         return []
 
