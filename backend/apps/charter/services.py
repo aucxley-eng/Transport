@@ -245,7 +245,14 @@ def confirm_hire(
         turnaround_minutes=turnaround_minutes,
     )
 
-    # Lock against concurrent confirmation of the same vehicle/driver.
+    # Lock the unit rows for the check-and-write. The comment that used to sit
+    # here claimed a lock that did not exist: a plain EXISTS let two
+    # dispatchers both pass before either wrote. Vehicle first, then driver, in
+    # the same order as the freight trip reservation, so the two paths cannot
+    # deadlock each other.
+    vehicle = Vehicle.objects.select_for_update().get(pk=vehicle.pk)
+    driver = Driver.objects.select_for_update().get(pk=driver.pk)
+
     clash = _overlaps(blocked_from, blocked_to).filter(
         Q(vehicle=vehicle) | Q(driver=driver)
     )

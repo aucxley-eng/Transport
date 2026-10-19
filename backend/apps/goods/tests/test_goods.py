@@ -6,8 +6,11 @@ Each test class names the blueprint rule it enforces. The rules are quoted in
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from unittest import mock
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -407,6 +410,61 @@ class CargoCapacityIndependenceTestCase(GoodsFixture):
         line = manifest.lines.get()
         self.assertEqual(line.compartment, self.bed)
         self.assertEqual(line.expected_weight_kg, Decimal(300))
+
+
+class CompartmentVolumeTestCase(GoodsFixture):
+    """M2: a compartment's volume limit is reported and enforced."""
+
+    def _capacity_entry(self, capacity, name):
+        return next(
+            entry for entry in capacity["compartments"] if entry["compartment"].name == name
+        )
+
+    def test_committed_volume_is_subtracted_from_the_compartment(self):
+        # 100 x 100 x 100 cm = 1.0 m3, 200 kg: only the bed (600 kg, 8 m3).
+        shipment = self._shipment(
+            packages=[
+                {"weight_kg": 200, "length_cm": 100, "width_cm": 100, "height_cm": 100}
+            ]
+        )
+        trip = self._trip()
+        build_manifest(trip=trip, packages=list(shipment.packages.all()))
+
+        capacity = cargo_capacity(trip)
+        bed = self._capacity_entry(capacity, "bed")
+        cab = self._capacity_entry(capacity, "cab")
+        self.assertEqual(bed["used_volume_m3"], Decimal("1.000"))
+        self.assertEqual(bed["free_volume_m3"], Decimal("7.000"))
+        # Before the fix this ignored usage and always read the full 8.0.
+        self.assertEqual(cab["used_volume_m3"], Decimal(0))
+        self.assertEqual(cab["free_volume_m3"], Decimal("1.0"))
+
+    def test_a_package_that_fits_by_weight_but_not_volume_is_refused(self):
+        # 2.0 m3 and 50 kg: the weight fits the bed (600 kg) and the cab
+        # (100 kg), but no compartment has 2 m3 after the bed is shrunk to 1.
+        self.bed.max_volume_m3 = 1.0
+        self.bed.save(update_fields=["max_volume_m3"])
+        shipment = self._shipment(
+            packages=[
+                {"weight_kg": 50, "length_cm": 100, "width_cm": 100, "height_cm": 200}
+            ]
+        )
+        trip = self._trip()
+        with self.assertRaises(GoodsError):
+            build_manifest(trip=trip, packages=list(shipment.packages.all()))
+
+    def test_volume_is_consumed_across_packages_in_the_same_compartment(self):
+        # Two 5 m3 packages fit the bed one at a time (8 m3) but not together,
+        # and the cab (1 m3) cannot take either.
+        shipment = self._shipment(
+            packages=[
+                {"weight_kg": 10, "length_cm": 200, "width_cm": 250, "height_cm": 100},
+                {"weight_kg": 10, "length_cm": 200, "width_cm": 250, "height_cm": 100},
+            ]
+        )
+        trip = self._trip()
+        with self.assertRaises(GoodsError):
+            build_manifest(trip=trip, packages=list(shipment.packages.all()))
 
 
 class ManifestReconciliationTestCase(GoodsFixture):
@@ -957,6 +1015,49 @@ class TripBookingTestCase(GoodsFixture):
     def test_a_trip_must_end_after_it_starts(self):
         with self.assertRaises(GoodsError):
             self._trip(planned_end=self.start)
+
+
+class ReservationLockTestCase(GoodsFixture):
+    """H1: the check-then-insert race is closed by locking the unit rows."""
+
+    def _locks_taken(self, call):
+        """Run ``call`` and record which models had a row lock requested.
+
+        This proves the lock is *asked for* on every backend. The SQL-level
+        assertion below is what proves PostgreSQL honours it.
+        """
+        from django.db.models.query import QuerySet
+
+        original = QuerySet.select_for_update
+        seen = []
+
+        def spy(queryset, *args, **kwargs):
+            seen.append(queryset.model)
+            return original(queryset, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "select_for_update", spy):
+            call()
+        return seen
+
+    def test_the_trip_locks_the_vehicle_and_then_the_driver(self):
+        # Fixed order: a competing reservation of either unit waits, and two
+        # dispatchers reserving two units cannot deadlock.
+        self.assertEqual(self._locks_taken(self._trip), [Vehicle, Driver])
+
+    def test_the_trip_locks_the_vehicle_even_without_a_driver(self):
+        self.assertEqual(
+            self._locks_taken(lambda: self._trip(driver=None)), [Vehicle]
+        )
+
+    def test_postgres_emits_for_update_for_the_reservation(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("FOR UPDATE is a PostgreSQL row-lock guarantee.")
+        with CaptureQueriesContext(connection) as captured:
+            self._trip()
+        self.assertTrue(
+            any("FOR UPDATE" in query["sql"].upper() for query in captured.captured_queries),
+            "the reservation must lock its rows on PostgreSQL",
+        )
 
 
 class VolumetricWeightTestCase(TestCase):

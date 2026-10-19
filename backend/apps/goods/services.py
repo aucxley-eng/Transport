@@ -16,6 +16,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.catalog.models import Quote, Service, build_quote
+from apps.fleet.models import Driver, Vehicle
 from apps.goods.models import (
     CustodyEvent,
     FreightTrip,
@@ -367,8 +368,10 @@ def create_freight_trip(
     """Plan a vehicle movement for freight.
 
     The vehicle and driver are held for the planned interval plus a turnaround,
-    so the same unit cannot be promised to two overlapping trips. Nothing here
-    reads seat inventory: cargo capacity is an independent ledger.
+    so the same unit cannot be promised to two overlapping trips. Their rows
+    are locked before the overlap check, so a concurrent dispatcher waits and
+    then sees this trip instead of double-booking the unit. Nothing here reads
+    seat inventory: cargo capacity is an independent ledger.
     """
     start = _aware(planned_start, "planned_start")
     end = _aware(planned_end, "planned_end")
@@ -376,15 +379,27 @@ def create_freight_trip(
         raise GoodsError("The trip must end after it starts.")
     if vehicle.organization_id != organization.pk:
         raise GoodsError("The vehicle belongs to another organization.")
+    if driver is not None and driver.organization_id != organization.pk:
+        raise GoodsError("The driver belongs to another organization.")
+
+    # Serialise every reservation of this unit on the unit's own row. Without
+    # this, two dispatchers can both pass the overlap check before either has
+    # written, and both trips are created -- the check-then-insert race the
+    # transaction alone does not close. The lock is held until commit, so the
+    # second dispatcher sees the first trip once it is let through.
+    #
+    # Always vehicle first, then driver: a fixed order is what stops two
+    # dispatchers reserving two units from deadlocking each other.
+    vehicle = Vehicle.objects.select_for_update().get(pk=vehicle.pk)
+    if driver is not None:
+        driver = Driver.objects.select_for_update().get(pk=driver.pk)
+
     if vehicle.status != vehicle.Status.ACTIVE:
         raise GoodsError("The vehicle is not active.")
     if not vehicle.cargo_weight_kg or not vehicle.cargo_volume_m3:
         raise GoodsError("The vehicle has no cargo capacity configured.")
-    if driver is not None:
-        if driver.organization_id != organization.pk:
-            raise GoodsError("The driver belongs to another organization.")
-        if not driver.is_dispatchable():
-            raise GoodsError("The driver is not dispatchable.")
+    if driver is not None and not driver.is_dispatchable():
+        raise GoodsError("The driver is not dispatchable.")
 
     blocked_to = end + timedelta(minutes=FREIGHT_TURNAROUND_MINUTES)
     overlap = Q(planned_start__lt=blocked_to, planned_end__gt=start)
@@ -422,28 +437,33 @@ def cargo_capacity(trip):
 
     committed_weight = ZERO
     committed_volume = ZERO
-    compartment_used = {c.pk: ZERO for c in vehicle.cargo_compartments.all()}
+    compartment_weight_used = {c.pk: ZERO for c in vehicle.cargo_compartments.all()}
+    compartment_volume_used = {c.pk: ZERO for c in vehicle.cargo_compartments.all()}
     if manifest is not None:
         committed = manifest.lines.filter(scan_state__in=_COMMITTED_SCAN_STATES)
         committed_weight = committed.aggregate(w=Sum("expected_weight_kg"))["w"] or ZERO
         committed_volume = committed.aggregate(v=Sum("package__volume_m3"))["v"] or ZERO
-        for line in manifest.lines.filter(scan_state__in=_COMMITTED_SCAN_STATES):
-            if line.compartment_id is not None:
-                compartment_used[line.compartment_id] += line.expected_weight_kg
+        for line in committed.select_related("package"):
+            if line.compartment_id is None:
+                continue
+            compartment_weight_used[line.compartment_id] += line.expected_weight_kg
+            if line.package_id is not None:
+                compartment_volume_used[line.compartment_id] += line.package.volume_m3
 
     capacity_weight = Decimal(vehicle.cargo_weight_kg)
     capacity_volume = Decimal(str(vehicle.cargo_volume_m3))
     compartments = []
     for compartment in vehicle.cargo_compartments.all():
-        used = compartment_used.get(compartment.pk, ZERO)
+        used_weight = compartment_weight_used.get(compartment.pk, ZERO)
+        used_volume = compartment_volume_used.get(compartment.pk, ZERO)
+        compartment_capacity_volume = Decimal(str(compartment.max_volume_m3))
         compartments.append(
             {
                 "compartment": compartment,
-                "used_weight_kg": used,
-                "free_weight_kg": max(Decimal(compartment.max_weight_kg) - used, ZERO),
-                "free_volume_m3": max(
-                    Decimal(str(compartment.max_volume_m3)), ZERO
-                ),
+                "used_weight_kg": used_weight,
+                "used_volume_m3": used_volume,
+                "free_weight_kg": max(Decimal(compartment.max_weight_kg) - used_weight, ZERO),
+                "free_volume_m3": max(compartment_capacity_volume - used_volume, ZERO),
                 "accepts_fragile": compartment.accepts_fragile,
                 "accepts_hazardous": compartment.accepts_hazardous,
             }
@@ -462,15 +482,21 @@ def cargo_capacity(trip):
     }
 
 
-def _place_in_compartments(capacity, packages, existing_lines=()):
+def _place_in_compartments(capacity, packages):
     """First-fit each package into a compartment.
 
     Compartment restrictions are enforced here: a fragile package will not go
     into a compartment that does not accept fragile goods, and no compartment is
-    loaded past its own weight limit. Returns {package_id: compartment}.
+    loaded past its own weight *or volume* limit. Returns
+    {package_id: compartment}.
     """
-    remaining = {
-        entry["compartment"].pk: entry["free_weight_kg"] for entry in capacity["compartments"]
+    remaining_weight = {
+        entry["compartment"].pk: entry["free_weight_kg"]
+        for entry in capacity["compartments"]
+    }
+    remaining_volume = {
+        entry["compartment"].pk: entry["free_volume_m3"]
+        for entry in capacity["compartments"]
     }
     acceptors = {
         entry["compartment"].pk: (
@@ -479,17 +505,14 @@ def _place_in_compartments(capacity, packages, existing_lines=()):
         )
         for entry in capacity["compartments"]
     }
-    for line in existing_lines:
-        if line.compartment_id is not None:
-            remaining[line.compartment_id] = max(
-                remaining.get(line.compartment_id, ZERO) - line.expected_weight_kg, ZERO
-            )
 
     placement = {}
     for package in sorted(packages, key=lambda p: p.weight_kg, reverse=True):
         candidates = []
-        for compartment_id, free in remaining.items():
-            if free < package.weight_kg:
+        for compartment_id, free_weight in remaining_weight.items():
+            if free_weight < package.weight_kg:
+                continue
+            if remaining_volume[compartment_id] < package.volume_m3:
                 continue
             accepts_fragile, accepts_hazardous = acceptors[compartment_id]
             if package.is_fragile and not accepts_fragile:
@@ -501,8 +524,9 @@ def _place_in_compartments(capacity, packages, existing_lines=()):
             raise GoodsError(
                 f"{package.label} does not fit any cargo compartment on this vehicle."
             )
-        chosen = min(candidates, key=lambda cid: remaining[cid])
-        remaining[chosen] -= package.weight_kg
+        chosen = min(candidates, key=lambda cid: remaining_weight[cid])
+        remaining_weight[chosen] -= package.weight_kg
+        remaining_volume[chosen] -= package.volume_m3
         placement[package.pk] = chosen
     return placement
 

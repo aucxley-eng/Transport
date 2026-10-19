@@ -11,8 +11,11 @@ The blueprint states the feature in three sentences; each is asserted here:
 """
 
 from datetime import date, datetime, timedelta
+from unittest import mock
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -393,6 +396,44 @@ class ClauseThreeAvailabilityTestCase(CharterFixture):
             vehicle_class=Vehicle.VehicleClass.BUS, start_at=self.start, end_at=self.end
         )
         self.assertNotIn(self.vehicle, vehicles)
+
+
+class ReservationLockTestCase(CharterFixture):
+    """H2: confirmation locks the unit rows instead of claiming to."""
+
+    def _locks_taken(self, call):
+        from django.db.models.query import QuerySet
+
+        original = QuerySet.select_for_update
+        seen = []
+
+        def spy(queryset, *args, **kwargs):
+            seen.append(queryset.model)
+            return original(queryset, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "select_for_update", spy):
+            call()
+        return seen
+
+    def test_confirmation_locks_the_vehicle_then_the_driver(self):
+        hire = self._quoted()
+        self.assertEqual(
+            self._locks_taken(
+                lambda: confirm_hire(hire, vehicle=self.vehicle, driver=self.driver)
+            ),
+            [Vehicle, Driver],
+        )
+
+    def test_postgres_emits_for_update_for_the_reservation(self):
+        if connection.vendor != "postgresql":
+            self.skipTest("FOR UPDATE is a PostgreSQL row-lock guarantee.")
+        hire = self._quoted()
+        with CaptureQueriesContext(connection) as captured:
+            confirm_hire(hire, vehicle=self.vehicle, driver=self.driver)
+        self.assertTrue(
+            any("FOR UPDATE" in query["sql"].upper() for query in captured.captured_queries),
+            "the reservation must lock its rows on PostgreSQL",
+        )
 
 
 class CharterApiTestCase(CharterFixture):
