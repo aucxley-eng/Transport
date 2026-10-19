@@ -11,6 +11,7 @@ from apps.orders.models import Order
 from apps.payments.models import LedgerEntry, PaymentAttempt
 from apps.payments.provider import (
     ProviderError,
+    ProviderRejected,
     ProviderUnavailable,
     get_provider,
 )
@@ -91,6 +92,25 @@ def create_payment_attempt(
             attempt.note = str(exc)
             attempt.save(update_fields=["note", "updated_at"])
             return attempt
+        except ProviderRejected as exc:
+            # The provider said no for good. The attempt is kept rather than
+            # rolled back, so the refusal is auditable, and it is terminal: no
+            # callback can arrive for a request the provider never issued.
+            attempt.state = PaymentAttempt.State.FAILED
+            attempt.note = str(exc)
+            attempt.result_received = True
+            attempt.save(
+                update_fields=["state", "note", "result_received", "updated_at"]
+            )
+            record_audit(
+                actor=None,
+                organization=attempt.organization,
+                action="payment.rejected",
+                entity_type="payment_attempt",
+                entity_id=attempt.pk,
+                reason=str(exc)[:255],
+            )
+            return attempt
 
         attempt.provider_reference = result["provider_reference"]
         attempt.save(update_fields=["provider_reference", "note", "updated_at"])
@@ -143,7 +163,13 @@ def handle_payment_callback(provider_slug, provider_payload, *, actor=None):
         # Stale or duplicate callback: no second business effect.
         return attempt, False
 
-    if amount_minor != attempt.expected_amount_minor or currency != attempt.currency:
+    # Only a claimed collection can mismatch. A failed callback carries no
+    # amount at all -- Daraja omits CallbackMetadata when ResultCode is not
+    # zero -- so treating a missing amount as a mismatch would park every
+    # declined payment in "unknown" instead of recording it as failed.
+    if state == "success" and (
+        amount_minor != attempt.expected_amount_minor or currency != attempt.currency
+    ):
         attempt.state = PaymentAttempt.State.UNKNOWN
         attempt.provider_payload = payload
         attempt.note = "Amount/currency mismatch between expected and callback."
