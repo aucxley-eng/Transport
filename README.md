@@ -1,4 +1,4 @@
-# Kenya Transport and Logistics Platform
+#  Transport and Logistics Platform
 
 A unified transport marketplace and operations platform for Kenya covering passenger transport (scheduled buses and shuttles, on-demand rides, corporate and charter) and goods transport (courier, intercity parcels, freight, warehousing, returns and claims) on one shared business foundation: identity, fleet, pricing, payments, tracking and finance.
 
