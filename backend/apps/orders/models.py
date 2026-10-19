@@ -38,6 +38,7 @@ class Order(BaseModel):
     is_payment_required = models.BooleanField(default=True)
     service_detail = models.JSONField(default=dict, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancel_reason = models.CharField(max_length=255, blank=True)
 
@@ -60,6 +61,19 @@ class Order(BaseModel):
         self.status = self.Status.CONFIRMED
         self.confirmed_at = timezone.now()
         self.save(update_fields=["status", "confirmed_at", "updated_at"])
+
+    def complete(self):
+        """Mark a confirmed order delivered. The performance obligation is
+        satisfied here, which is the point revenue is recognised from unearned
+        revenue; a created (unpaid) order cannot complete, and an already
+        terminal order is left alone."""
+        from django.utils import timezone
+
+        if self.status != self.Status.CONFIRMED:
+            raise ValueError("Only a confirmed order can be completed.")
+        self.status = self.Status.COMPLETED
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "completed_at", "updated_at"])
 
     def cancel(self, reason=""):
         from django.utils import timezone

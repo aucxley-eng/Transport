@@ -97,6 +97,17 @@ class Shipment(BaseModel):
     )
     reference = models.CharField(max_length=32, unique=True, editable=False)
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name="shipments")
+    # The commercial order this shipment fulfils, when there is one. A goods
+    # booking is priced from a quote; the order is what carries the payment and
+    # the money ledger, so delivery can recognise revenue against it. Blank for
+    # a shipment booked without an order.
+    order = models.ForeignKey(
+        "orders.Order",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="shipments",
+    )
 
     # Parties. A recipient is often not a platform user, so the name and phone
     # are stored directly; the sender keeps a link when they are one.

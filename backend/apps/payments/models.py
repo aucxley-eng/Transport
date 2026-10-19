@@ -74,6 +74,59 @@ class PaymentAttempt(BaseModel):
         return self.state in (self.State.SUCCESS, self.State.FAILED)
 
 
+class Refund(BaseModel):
+    """A reversal of a collection, recorded as its own first-class event.
+
+    A refund is not an edit of the collection: it is a new, balanced set of
+    ledger entries that moves the money back out, and this row records why.
+    ``reference`` is the idempotency key -- replaying the same refund reference
+    returns the same refund rather than posting twice. The split between
+    ``from_unearned_minor`` and ``from_revenue_minor`` says whether the money
+    came back before the service was recognised (out of the liability) or after
+    (clawed back from revenue).
+    """
+
+    organization = models.ForeignKey(
+        "accounts.Organization",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="refunds",
+    )
+    order = models.ForeignKey(
+        "orders.Order", on_delete=models.PROTECT, related_name="refunds"
+    )
+    payment_attempt = models.ForeignKey(
+        PaymentAttempt,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="refunds",
+    )
+    amount_minor = models.PositiveBigIntegerField()
+    currency = models.CharField(max_length=3, default="KES")
+    reference = models.CharField(max_length=120, unique=True)
+    reason = models.CharField(max_length=255, blank=True)
+    from_unearned_minor = models.PositiveBigIntegerField(default=0)
+    from_revenue_minor = models.PositiveBigIntegerField(default=0)
+    correlation_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    recorded_by = models.ForeignKey(
+        "accounts.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="refunds_recorded",
+    )
+
+    objects = OrganizationScopedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Refund {self.reference} {self.currency} {self.amount_minor}"
+
+
 class LedgerEntry(models.Model):
     """Append-only balanced ledger entry (blueprint 13, 17). Records are never
     updated or deleted; corrections post new entries."""

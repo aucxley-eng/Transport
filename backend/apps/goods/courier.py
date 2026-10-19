@@ -282,6 +282,7 @@ def book_courier_order(
     organization,
     sender=None,
     load_type=None,
+    commercial_order=None,
 ):
     """Book a courier order from an accepted quote.
 
@@ -325,6 +326,7 @@ def book_courier_order(
         organization=organization,
         reference=_ref("SHP"),
         service=service,
+        order=commercial_order,
         sender=sender,
         sender_name=payload.get("sender_name", ""),
         sender_phone=payload.get("sender_phone", ""),
@@ -521,6 +523,16 @@ def refresh_order_status(order, now=None):
     if status != order.status:
         order.status = status
         order.save(update_fields=["status", "updated_at"])
+    # A fully delivered shipment satisfies its commercial order. That is the
+    # point the order's collected money is earned rather than held, so it is
+    # completed here; the payments side recognises the revenue from the
+    # delivery outbox event. A shipment with no order (the common case for a
+    # direct courier booking) has nothing to settle.
+    if status == Shipment.Status.DELIVERED and order.order_id is not None:
+        from apps.orders.models import Order
+
+        if order.order.status == Order.Status.CONFIRMED:
+            order.order.complete()
     return order
 
 
@@ -601,6 +613,8 @@ def deliver_package(
         organization_id=order.organization_id,
         payload={
             "order": order.reference,
+            "shipment_id": str(order.pk),
+            "order_id": str(order.order_id) if order.order_id else None,
             "parcel": package.label,
             "recipient": package.recipient_name,
         },

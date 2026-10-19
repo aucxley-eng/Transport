@@ -203,6 +203,7 @@ def create_shipment(
     terms=None,
     packages=None,
     load_type=None,
+    order=None,
 ):
     """Book a consignment from an accepted quote.
 
@@ -249,6 +250,7 @@ def create_shipment(
         organization=organization,
         reference=_ref("SHP"),
         service=service,
+        order=order,
         sender=sender,
         sender_name=sender_name,
         sender_phone=sender_phone,

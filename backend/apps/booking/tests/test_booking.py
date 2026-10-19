@@ -327,6 +327,26 @@ class BoardingTestCase(BookingFixture):
         self.assertEqual(boarded.state, Ticket.State.BOARDED)
         self.assertEqual(BoardingScan.objects.filter(ticket=ticket).count(), 1)
 
+    def test_boarding_the_last_seat_completes_the_paid_order(self):
+        from apps.common.models import OutboxEvent
+
+        ticket = self._issue_ticket()
+        order = ticket.hold.order
+        order.confirm()
+        board_from_scan(ticket_reference=ticket.reference)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+        # The event the payments side recognises revenue from names the order.
+        event = OutboxEvent.objects.get(event_type="booking.ticket_boarded")
+        self.assertEqual(event.payload["order_id"], str(order.pk))
+
+    def test_an_unpaid_order_is_not_completed_by_boarding(self):
+        ticket = self._issue_ticket()
+        order = ticket.hold.order  # still CREATED: never paid
+        board_from_scan(ticket_reference=ticket.reference)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CREATED)
+
     def test_double_board_is_rejected(self):
         ticket = self._issue_ticket()
         board_from_scan(ticket_reference=ticket.reference)

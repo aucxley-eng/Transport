@@ -9,6 +9,61 @@ from rest_framework.test import APITestCase
 
 from apps.accounts.models import Membership, Organization, Role, User
 from apps.catalog.models import Service, build_quote
+from apps.orders.models import Order
+
+
+class OrderCompletionTestCase(APITestCase):
+    """H5a: completion is the performance obligation being satisfied, so it may
+    only happen to a paid (confirmed) order and only once."""
+
+    def setUp(self):
+        self.org = Organization.objects.create(
+            name="Complete Line", slug="complete-line"
+        )
+        self.customer = User.objects.create_user("0711100066", "pass-W-1234")
+        self.service = Service.objects.create(
+            slug="parcel-done", name="Parcel Done", service_type=Service.ServiceType.PARCEL
+        )
+
+    def _order(self):
+        quote = build_quote(
+            service=self.service,
+            request_payload={"route": "a-b"},
+            total_minor=1000,
+            organization=self.org,
+        )
+        quote.accept()
+        return Order.objects.create(
+            organization=self.org,
+            customer=self.customer,
+            service=self.service,
+            quote=quote,
+            currency=quote.currency,
+            total_minor=quote.total_minor,
+        )
+
+    def test_a_confirmed_order_completes_and_is_stamped(self):
+        order = self._order()
+        order.confirm()
+        order.complete()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+        self.assertIsNotNone(order.completed_at)
+
+    def test_an_unpaid_order_cannot_complete(self):
+        order = self._order()
+        with self.assertRaises(ValueError):
+            order.complete()
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CREATED)
+        self.assertIsNone(order.completed_at)
+
+    def test_completing_twice_is_refused(self):
+        order = self._order()
+        order.confirm()
+        order.complete()
+        with self.assertRaises(ValueError):
+            order.complete()
 
 
 class OrderCurrencyTestCase(APITestCase):

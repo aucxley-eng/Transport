@@ -15,7 +15,9 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Organization, Role, User
 from apps.catalog.models import Place, RateCard, RateLine, Service
+from apps.common.models import OutboxEvent
 from apps.fleet.models import CargoCompartment, Driver, Vehicle
+from apps.orders.models import Order
 from apps.goods.consolidation import (
     REASON_DROP_OVERLOADS_WINDOW,
     REASON_TRIP_IS_PASSENGER,
@@ -772,6 +774,62 @@ class PartialDeliveryTestCase(CourierFixture):
         self.assertEqual(
             order.packages.filter(status=Package.Status.DELIVERED).count(), 3
         )
+
+
+class ShipmentOrderLinkTestCase(CourierFixture):
+    """H5a: a fully delivered shipment settles the order it fulfils.
+
+    Before the fix a shipment could not name the order it delivered, so the
+    money it collected had no way to leave unearned revenue."""
+
+    def _linked_order(self, shipment):
+        order = Order.objects.create(
+            organization=self.org,
+            customer=self.sender,
+            service=self.service,
+            quote=shipment.quote,
+            currency=shipment.quote.currency,
+            total_minor=shipment.quote.total_minor,
+        )
+        order.confirm()
+        shipment.order = order
+        shipment.save(update_fields=["order", "updated_at"])
+        return order
+
+    def test_delivering_every_parcel_completes_the_linked_order(self):
+        shipment = self._order()
+        order = self._linked_order(shipment)
+        for package in list(shipment.packages.all()):
+            self._deliver(package)
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+
+    def test_a_partial_delivery_leaves_the_order_confirmed(self):
+        shipment = self._order()
+        order = self._linked_order(shipment)
+        self._deliver(shipment.packages.first())
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CONFIRMED)
+
+    def test_the_delivery_event_names_the_order(self):
+        shipment = self._order()
+        order = self._linked_order(shipment)
+        self._deliver(shipment.packages.first())
+        event = OutboxEvent.objects.filter(
+            event_type="goods.courier_parcel_delivered"
+        ).first()
+        self.assertEqual(event.payload["order_id"], str(order.pk))
+
+    def test_a_shipment_without_an_order_delivers_without_settling(self):
+        shipment = self._order()
+        for package in list(shipment.packages.all()):
+            self._deliver(package)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, Shipment.Status.DELIVERED)
+        event = OutboxEvent.objects.filter(
+            event_type="goods.courier_parcel_delivered"
+        ).first()
+        self.assertIsNone(event.payload["order_id"])
 
 
 class DeliveryProofTestCase(CourierFixture):

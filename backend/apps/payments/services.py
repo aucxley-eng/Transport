@@ -8,7 +8,8 @@ from django.db import transaction
 from apps.audit.models import record_audit
 from apps.common.outbox import record_outbox
 from apps.orders.models import Order
-from apps.payments.models import LedgerEntry, PaymentAttempt
+from apps.payments import ledger
+from apps.payments.models import PaymentAttempt, Refund
 from apps.payments.provider import (
     ProviderError,
     ProviderRejected,
@@ -243,34 +244,169 @@ def _confirm_order(order):
 
 
 def _post_collection(attempt):
-    """Standard balanced postings on a successful collection. Account mapping
-    is provisional; the accountant approves final principal/agent mapping
-    (blueprint 13, 17)."""
+    """Standard balanced postings on a successful collection.
+
+    The money is not yet revenue: it is a liability (unearned revenue) until
+    the service is delivered, at which point :func:`recognize_revenue` moves it
+    across. The account names are the shared chart of accounts in
+    :mod:`apps.payments.ledger`."""
+    ledger.post_pair(
+        journal="collections",
+        debit_account=ledger.CASH_COLLECTIONS,
+        credit_account=ledger.UNEARNED_REVENUE,
+        amount_minor=attempt.expected_amount_minor,
+        currency=attempt.currency,
+        order=attempt.order,
+        payment_attempt=attempt,
+        reference=str(attempt.provider_reference or ""),
+    )
+
+
+@transaction.atomic
+def recognize_revenue(*, order, actor=None, reference=""):
+    """Move an order's collected money from unearned revenue to revenue.
+
+    Called when the performance obligation is satisfied -- the service was
+    delivered -- not when the money arrived. Balance-driven and therefore
+    idempotent: it moves whatever is still sitting in unearned revenue and,
+    once that is empty, a repeat call posts nothing. An order that was never
+    collected, or was already refunded, has no unearned balance and is left
+    alone.
+    """
+    if order is None:
+        return None
+    unearned = ledger.account_balance(order=order, account=ledger.UNEARNED_REVENUE)
+    if unearned <= 0:
+        return None
+    reference = reference or f"recognize:{order.pk}"
+    ledger.post_pair(
+        journal="recognition",
+        debit_account=ledger.UNEARNED_REVENUE,
+        credit_account=ledger.SERVICE_REVENUE,
+        amount_minor=unearned,
+        currency=order.currency,
+        order=order,
+        reference=reference,
+    )
+    record_audit(
+        actor=actor,
+        organization=order.organization,
+        action="payment.revenue_recognized",
+        entity_type="order",
+        entity_id=order.pk,
+        new_value={"amount_minor": unearned, "currency": order.currency},
+        reason="Service delivered; unearned revenue recognised.",
+    )
+    record_outbox(
+        event_type="payment.revenue_recognized",
+        aggregate_type="order",
+        aggregate_id=order.pk,
+        organization_id=order.organization_id,
+        payload={"order_id": str(order.pk), "amount_minor": unearned},
+    )
+    return unearned
+
+
+@transaction.atomic
+def refund_collection(
+    *, order, amount_minor, reference, reason="", actor=None, payment_attempt=None
+):
+    """Reverse a collection, posting the balanced entries that give it back.
+
+    The refund unwinds whatever value the order still holds: first the part
+    still sitting in unearned revenue (the customer cancelled before travelling)
+    and, if that is not enough, the rest out of recognised revenue (money
+    clawed back after the service was delivered). It refuses to refund more
+    than the order still holds, so the ledger can never be driven negative.
+
+    Idempotent on ``reference``: a replayed refund returns the existing row and
+    posts nothing further.
+    """
+    order_obj = order
+    if order_obj is None:
+        raise PaymentError("A refund must name an order.")
+    if amount_minor is None or amount_minor <= 0:
+        raise PaymentError("A refund must be for a positive amount.")
+
+    existing = Refund.objects.filter(reference=reference).first()
+    if existing is not None:
+        if existing.order_id != order_obj.pk or existing.amount_minor != amount_minor:
+            raise PaymentError(
+                "Refund reference reused for a different order or amount."
+            )
+        return existing
+
+    unearned = ledger.account_balance(order=order_obj, account=ledger.UNEARNED_REVENUE)
+    recognised = ledger.account_balance(order=order_obj, account=ledger.SERVICE_REVENUE)
+    available = unearned + recognised
+    if amount_minor > available:
+        raise PaymentError(
+            "A refund cannot exceed what the order still holds "
+            f"({available} {order_obj.currency})."
+        )
+
+    from_unearned = min(amount_minor, unearned)
+    from_revenue = amount_minor - from_unearned
     correlation = uuid.uuid4()
-    debit_account = "cash.customer_collections"
-    credit_account = "liability.unearned_revenue"
-    LedgerEntry.objects.create(
-        journal="collections",
-        account=debit_account,
-        amount_minor=attempt.expected_amount_minor,
-        currency=attempt.currency,
-        entry_type="debit",
-        order=attempt.order,
-        payment_attempt=attempt,
-        reference=str(attempt.provider_reference or ""),
+    for amount, account in (
+        (from_unearned, ledger.UNEARNED_REVENUE),
+        (from_revenue, ledger.SERVICE_REVENUE),
+    ):
+        if amount <= 0:
+            continue
+        ledger.post_pair(
+            journal="refunds",
+            debit_account=account,
+            credit_account=ledger.CASH_COLLECTIONS,
+            amount_minor=amount,
+            currency=order_obj.currency,
+            order=order_obj,
+            payment_attempt=payment_attempt,
+            reference=str(reference),
+            correlation_id=correlation,
+        )
+
+    refund = Refund.objects.create(
+        organization=order_obj.organization,
+        order=order_obj,
+        payment_attempt=payment_attempt,
+        amount_minor=amount_minor,
+        currency=order_obj.currency,
+        reference=str(reference),
+        reason=reason,
+        from_unearned_minor=from_unearned,
+        from_revenue_minor=from_revenue,
         correlation_id=correlation,
+        recorded_by=actor,
     )
-    LedgerEntry.objects.create(
-        journal="collections",
-        account=credit_account,
-        amount_minor=attempt.expected_amount_minor,
-        currency=attempt.currency,
-        entry_type="credit",
-        order=attempt.order,
-        payment_attempt=attempt,
-        reference=str(attempt.provider_reference or ""),
-        correlation_id=correlation,
+    record_audit(
+        actor=actor,
+        organization=order_obj.organization,
+        action="payment.refunded",
+        entity_type="refund",
+        entity_id=refund.pk,
+        reason=reason,
+        new_value={
+            "order": str(order_obj.pk),
+            "amount_minor": amount_minor,
+            "from_unearned_minor": from_unearned,
+            "from_revenue_minor": from_revenue,
+            "reference": reference,
+        },
     )
+    record_outbox(
+        event_type="payment.refunded",
+        aggregate_type="refund",
+        aggregate_id=refund.pk,
+        organization_id=order_obj.organization_id,
+        payload={
+            "refund_id": str(refund.pk),
+            "order_id": str(order_obj.pk),
+            "amount_minor": amount_minor,
+            "reference": reference,
+        },
+    )
+    return refund
 
 
 def _issue_booking_tickets(attempt):

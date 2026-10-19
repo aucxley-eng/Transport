@@ -34,6 +34,7 @@ from apps.booking.models import (
     Ticket,
 )
 from apps.catalog.models import build_quote
+from apps.common.outbox import record_outbox
 from apps.orders.models import Order
 
 DEFAULT_HOLD_MINUTES = 10
@@ -340,7 +341,39 @@ def board_from_scan(
         scanner_device=scanner_device,
         note=note,
     )
+    # Boarding is the performance obligation being satisfied for that seat, so
+    # the order that paid for it is settled here. The event carries the order
+    # the payments side recognises revenue against; a ticket whose hold has
+    # been cleared (order link lost) boards but cannot settle an order.
+    order = ticket.hold.order if ticket.hold_id and ticket.hold.order_id else None
+    if order is not None:
+        if not Ticket.objects.filter(
+            hold__order=order, state=Ticket.State.ISSUED
+        ).exists():
+            _complete_boarded_order(order)
+        record_outbox(
+            event_type="booking.ticket_boarded",
+            aggregate_type="ticket",
+            aggregate_id=ticket.pk,
+            organization_id=order.organization_id,
+            payload={
+                "ticket_id": str(ticket.pk),
+                "order_id": str(order.pk),
+                "departure_id": str(ticket.departure_id),
+            },
+        )
     return ticket
+
+
+def _complete_boarded_order(order):
+    """Complete an order once every seat it paid for has boarded.
+
+    A cancellation without a refund is judged as money kept rather than a
+    service owed, so it does not block completion; a seat still ISSUED -- still
+    to be boarded -- does."""
+    if order.status != Order.Status.CONFIRMED:
+        return
+    order.complete()
 
 
 @transaction.atomic
