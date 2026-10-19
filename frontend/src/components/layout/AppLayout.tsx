@@ -19,11 +19,6 @@ const OPERATIONS: NavEntry[] = [
   { to: "/dispatch", label: "Dispatch board" },
 ];
 
-const GOODS: NavEntry[] = [
-  { to: "/freight-trips", label: "Freight trips" },
-  { to: "/shipments", label: "Shipments" },
-];
-
 function SidebarLink({ entry }: { entry: NavEntry }) {
   return (
     <NavLink
@@ -55,11 +50,6 @@ export function AppLayout() {
 
         <div className="sidebar__section">Operations</div>
         {OPERATIONS.map((entry) => (
-          <SidebarLink key={entry.to} entry={entry} />
-        ))}
-
-        <div className="sidebar__section">Goods</div>
-        {GOODS.map((entry) => (
           <SidebarLink key={entry.to} entry={entry} />
         ))}
 

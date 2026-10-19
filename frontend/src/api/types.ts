@@ -48,33 +48,3 @@ export interface CurrentUser {
   full_name: string;
   memberships: Membership[];
 }
-
-/**
- * Roles that may manage an organization's records.
- *
- * Mirrors `Role.elevated()` in apps/accounts/models.py. The UI uses it to decide
- * what to show -- the API enforces it regardless, so a hidden control is a
- * convenience, never a security boundary.
- */
-const ELEVATED_ROLES = new Set<Role>([
-  "operator_admin",
-  "dispatcher",
-  "branch_staff",
-  "finance_officer",
-  "support_agent",
-  "platform_admin",
-]);
-
-export function hasElevatedRole(user: CurrentUser | null): boolean {
-  if (user === null) return false;
-  return user.memberships.some(
-    (m) => m.is_active && ELEVATED_ROLES.has(m.role),
-  );
-}
-
-export function isDispatcher(user: CurrentUser | null): boolean {
-  if (user === null) return false;
-  return user.memberships.some(
-    (m) => m.is_active && (m.role === "dispatcher" || m.role === "operator_admin"),
-  );
-}

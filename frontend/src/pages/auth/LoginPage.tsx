@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { describeError } from "@/api/client";
 import { useAuth } from "@/context/AuthContext";
@@ -17,7 +17,7 @@ interface LocationState {
 }
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { user, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -27,6 +27,11 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const from = (location.state as LocationState | null)?.from ?? "/dispatch";
+
+  // An operator who already holds a session should never see the login form.
+  if (user !== null) {
+    return <Navigate to={from} replace />;
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();

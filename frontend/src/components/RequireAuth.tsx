@@ -11,11 +11,25 @@ import { useAuth } from "@/context/AuthContext";
  * bypasses this gate still gets nothing but 401s.
  */
 export function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, initialising } = useAuth();
+  const { user, initialising, sessionError, retry } = useAuth();
   const location = useLocation();
 
   if (initialising) {
     return <div className="centred">Loading…</div>;
+  }
+
+  // The token could not be checked because the server was unreachable. The
+  // session is intact, so offer a retry rather than bouncing to the login
+  // screen and making the operator sign in again.
+  if (sessionError !== null && user === null) {
+    return (
+      <div className="centred">
+        <p role="alert">{sessionError}</p>
+        <button type="button" className="primary" onClick={retry}>
+          Try again
+        </button>
+      </div>
+    );
   }
 
   if (user === null) {

@@ -3,6 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      A default-deny policy. Tokens live in localStorage, so the only real
+      defence against an injected script reading them is to refuse to load
+      third-party script at all. 'unsafe-inline' is required for the Vite dev
+      HMR preamble and React's inline styles; ws:/wss: for HMR sockets.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <title>Transport — Operations</title>
   </head>
   <body>

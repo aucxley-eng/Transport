@@ -95,8 +95,17 @@ api.interceptors.response.use(
       config.headers.Authorization = `Bearer ${access}`;
       return await api.request(config);
     } catch (refreshError) {
-      clearTokens();
-      onSessionExpired?.();
+      // Only a rejection *by the server* means the refresh token is dead. A
+      // network failure (wifi down, backend restarting) must not throw away a
+      // valid 7-day session: keep the tokens and let the caller retry.
+      const rejected =
+        getRefreshToken() === null ||
+        (axios.isAxiosError(refreshError) &&
+          refreshError.response !== undefined);
+      if (rejected) {
+        clearTokens();
+        onSessionExpired?.();
+      }
       return Promise.reject(refreshError);
     }
   },
