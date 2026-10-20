@@ -4,6 +4,8 @@ These are not tests of behaviour; they are tests of the harness. Each one protec
 a way the suite could do real damage to a machine it was not given.
 """
 
+import os
+
 from django.conf import settings
 from django.test import SimpleTestCase
 from unittest.case import SkipTest
@@ -48,6 +50,46 @@ class TestDatabaseIsAlwaysLocalTestCase(SimpleTestCase):
         # Django overrides NAME for SQLite tests, so nothing is written to disk and
         # no stray test-db.sqlite3 is left behind by an interrupted run.
         self.assertIn("mode=memory", settings.DATABASES["default"]["NAME"])
+
+
+class TestProviderNeverLeavesTheStubTestCase(SimpleTestCase):
+    """The suite must not be able to select the live M-PESA adapter.
+
+    `manage.py` loads `.env` before the settings module is imported, so a
+    developer who has pasted real Daraja credentials would otherwise have every
+    test that initiates a payment place a real STK push against a real
+    subscriber, and every test that assumes the local stub fail. Clearing the
+    credentials in the test settings is what prevents it; this notices if the
+    clearing is ever dropped.
+    """
+
+    def test_no_live_mpesa_credentials_reach_the_suite(self):
+        leaked = [
+            name
+            for name in (
+                "MPESA_ENVIRONMENT",
+                "MPESA_CONSUMER_KEY",
+                "MPESA_CONSUMER_SECRET",
+                "MPESA_SHORTCODE",
+                "MPESA_PASSKEY",
+                "MPESA_CALLBACK_URL",
+            )
+            if os.environ.get(name)
+        ]
+        self.assertEqual(
+            leaked, [], f"the suite is running with live payment credentials: {leaked}"
+        )
+
+    def test_the_selected_adapter_is_the_local_stub(self):
+        from apps.payments.provider import (
+            MpesaProvider,
+            daraja_credentials,
+            get_provider,
+        )
+
+        self.assertIsNone(daraja_credentials())
+        provider = get_provider("mpesa")
+        self.assertIsInstance(provider, MpesaProvider)
 
 
 class PostgresOptInGuardTestCase(SimpleTestCase):

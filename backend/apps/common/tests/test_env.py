@@ -4,13 +4,19 @@
 ``config.env.load_env``. When only ``manage.py`` loaded ``.env`` a deployment
 started through ``gunicorn config.wsgi`` silently ignored the file, so these
 tests pin the contract down.
+
+``config.wsgi`` and ``config.asgi`` are imported *inside* the tests, under a
+patched ``load_dotenv``. Importing them at module level would execute a real
+``load_env()`` against the developer's ``.env``, which puts live payment
+credentials back into the environment the test settings deliberately cleared.
 """
 
+import importlib
 import inspect
 import unittest
 from unittest import mock
 
-from config import asgi, env, wsgi
+from config import env
 
 
 class LoadEnvTestCase(unittest.TestCase):
@@ -35,14 +41,14 @@ class LoadEnvTestCase(unittest.TestCase):
             )
 
     def test_wsgi_and_asgi_load_the_env(self):
-        for module in (wsgi, asgi):
-            lines = [line.strip() for line in inspect.getsource(module).splitlines()]
-            self.assertIn(
-                "load_env()",
-                lines,
-                f"{module.__name__} must call load_env() like manage.py does",
-            )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        for name in ("config.wsgi", "config.asgi"):
+            with self.subTest(module=name), mock.patch.object(env, "load_dotenv"):
+                module = importlib.reload(importlib.import_module(name))
+                lines = [
+                    line.strip() for line in inspect.getsource(module).splitlines()
+                ]
+                self.assertIn(
+                    "load_env()",
+                    lines,
+                    f"{name} must call load_env() like manage.py does",
+                )

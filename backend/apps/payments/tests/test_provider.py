@@ -683,6 +683,169 @@ class HttpEndToEndTestCase(APITestCase):
         self.assertIn("payment.success", actions)
 
 
+class HttpDarajaCallbackTestCase(APITestCase):
+    """A real Daraja `stkCallback`, delivered over the live webhook endpoint.
+
+    The two halves of a live proof are deliberately separable. Safaricom cannot
+    reach a callback URL on localhost and its Imperva edge rejects a scripted
+    STK push, so the push half cannot be exercised from a machine like this one.
+    The delivery half can: the payload below is posted through the real view,
+    the real Daraja parser, the real amount check and the real ledger, so the
+    only thing that is manual is the transport -- which is what a live proof
+    against a callback URL Safaricom could not reach would have been anyway.
+    """
+
+    def setUp(self):
+        from apps.payments import provider
+
+        provider._PROVIDERS.clear()
+        self.org = Organization.objects.create(name="Echo Haulage", slug="echo")
+        self.user = User.objects.create_user("0733000012", "pass-Z-1234")
+        Membership.objects.create(
+            user=self.user, organization=self.org, role=Role.OPERATOR_ADMIN
+        )
+        service = Service.objects.create(
+            slug="daraja-parcel", name="Daraja Parcel", service_type="courier"
+        )
+        quote = build_quote(
+            service=service,
+            request_payload={"route": "nairobi-mombasa"},
+            total_minor=30000,
+            currency="KES",
+            organization=self.org,
+        )
+        quote.accept()
+        self.order = Order.objects.create(
+            organization=self.org,
+            customer=self.user,
+            service=service,
+            quote=quote,
+            currency="KES",
+            total_minor=30000,
+        )
+        self.checkout_id = "ws_CO_191220191020363925"
+        self.payload = DARAJA_SUCCESS
+
+    def tearDown(self):
+        from apps.payments import provider
+
+        provider._PROVIDERS.clear()
+
+    def _attempt_pending(self):
+        """A pending attempt carrying the CheckoutRequestID Daraja would issue."""
+        attempt = create_payment_attempt(
+            organization_id=self.org.pk,
+            order_id=self.order.pk,
+            idempotency_key="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            amount_minor=30000,
+            currency="KES",
+            customer_phone="0733000012",
+            provider_slug="mpesa",
+        )
+        attempt.provider_reference = self.checkout_id
+        attempt.save(update_fields=["provider_reference", "updated_at"])
+        return attempt
+
+    def _post(self, payload=None):
+        # Credentials are absent while the attempt is created so the stub
+        # answers; the cache is then dropped so the callback is parsed by the
+        # real Daraja adapter, as it would be in production.
+        from apps.payments import provider
+
+        with mock.patch.dict("os.environ", CREDENTIALS, clear=False):
+            provider._PROVIDERS.clear()
+            return self.client.post(
+                "/api/v1/webhooks/mpesa/",
+                payload if payload is not None else self.payload,
+                format="json",
+            )
+
+    def test_a_real_stk_callback_shape_settles_the_order_over_http(self):
+        attempt = self._attempt_pending()
+        self.assertEqual(attempt.state, PaymentAttempt.State.PENDING)
+
+        settled = self._post()
+
+        self.assertEqual(settled.status_code, 200, settled.data)
+        self.assertTrue(settled.data["applied"])
+        self.assertEqual(settled.data["attempt_state"], "success")
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.state, PaymentAttempt.State.SUCCESS)
+        self.assertTrue(attempt.result_received)
+        self.assertEqual(attempt.provider_payload["mpesa_receipt_number"], "NLJ7RT61SV")
+
+        postings = LedgerEntry.objects.filter(payment_attempt=attempt)
+        self.assertEqual(postings.count(), 2)
+        self.assertEqual({row.entry_type for row in postings}, {"debit", "credit"})
+        self.assertEqual(len({row.correlation_id for row in postings}), 1)
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CONFIRMED)
+
+    def test_replaying_the_same_stk_callback_costs_nothing_twice(self):
+        attempt = self._attempt_pending()
+
+        first = self._post()
+        second = self._post()
+
+        self.assertTrue(first.data["applied"])
+        self.assertFalse(second.data["applied"])
+        self.assertEqual(second.data["attempt_state"], "success")
+        self.assertEqual(
+            LedgerEntry.objects.filter(payment_attempt=attempt).count(),
+            2,
+            "a replayed callback must not post a second collection",
+        )
+
+    def test_a_declined_stk_callback_over_http_leaves_the_order_alone(self):
+        attempt = self._attempt_pending()
+        self.payload = DARAJA_DECLINED
+        attempt.provider_reference = DARAJA_DECLINED["Body"]["stkCallback"][
+            "CheckoutRequestID"
+        ]
+        attempt.save(update_fields=["provider_reference", "updated_at"])
+
+        settled = self._post(DARAJA_DECLINED)
+
+        self.assertEqual(settled.status_code, 200, settled.data)
+        self.assertTrue(settled.data["applied"])
+        self.assertEqual(settled.data["attempt_state"], "failed")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.state, PaymentAttempt.State.FAILED)
+        self.assertFalse(LedgerEntry.objects.filter(payment_attempt=attempt).exists())
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CREATED)
+
+    def test_the_amount_in_the_callback_must_match_the_order(self):
+        attempt = self._attempt_pending()
+        mismatched = {
+            "Body": {
+                "stkCallback": {
+                    **self.payload["Body"]["stkCallback"],
+                    "CallbackMetadata": {
+                        "Item": [
+                            {"Name": "Amount", "Value": 1.0},
+                            {"Name": "MpesaReceiptNumber", "Value": "NLJ7RT61SW"},
+                            {"Name": "TransactionDate", "Value": 20191219102115},
+                            {"Name": "PhoneNumber", "Value": 254708374149},
+                        ]
+                    },
+                }
+            }
+        }
+
+        settled = self._post(mismatched)
+
+        self.assertEqual(settled.status_code, 200, settled.data)
+        self.assertTrue(settled.data["applied"])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.state, PaymentAttempt.State.UNKNOWN)
+        self.assertFalse(LedgerEntry.objects.filter(payment_attempt=attempt).exists())
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CREATED)
+
+
 class HelperTestCase(APITestCase):
     def test_minor_units_survive_binary_floating_point(self):
         self.assertEqual(minor_units("0.29"), 29)
