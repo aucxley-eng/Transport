@@ -228,12 +228,22 @@ class DarajaProvider(PaymentProvider):
 
     def _request(self, method, path, *, json_body=None, auth=None, params=None):
         url = f"{self.base_url}{path}"
+        headers = None
+        if isinstance(auth, str):
+            # requests treats ``auth`` as a challenge-response handler it
+            # calls, so handing it a bearer string raises TypeError while the
+            # request is still being built -- nothing reaches the network and
+            # the failure reads as a local crash. A bearer token is a plain
+            # header, which is how every reference integration sends it.
+            headers = {"Authorization": auth}
+            auth = None
         try:
             response = self._session.request(
                 method,
                 url,
                 json=json_body,
                 params=params,
+                headers=headers,
                 auth=auth,
                 timeout=self.timeout,
             )

@@ -231,9 +231,46 @@ class RequestBuildingTestCase(APITestCase):
         self.assertEqual(body["CallBackURL"], CREDENTIALS["MPESA_CALLBACK_URL"])
         self.assertEqual(body["AccountReference"], "attempt-1")
         self.assertRegex(body["Timestamp"], r"^\d{14}$")
-        self.assertEqual(
-            stk["auth"], "Bearer token", "the push must carry the OAuth token"
+        self.assertEqual(stk["headers"], {"Authorization": "Bearer token"})
+        self.assertIsNone(stk["auth"])
+
+    def test_requests_can_actually_prepare_the_push(self):
+        """A string in ``auth`` raises TypeError before a byte is sent.
+
+        The injected session accepts any keyword, so the swap above is
+        invisible to every other test here: only handing the same kwargs to a
+        real ``requests.Request`` shows that the push could never have left the
+        machine. This is the assertion that failed against a live Daraja call.
+        """
+        session = self._session(
+            FakeResponse(body={"access_token": "token", "expires_in": 3599}),
+            FakeResponse(
+                body={
+                    "ResponseCode": "0",
+                    "MerchantRequestID": "m-9",
+                    "CheckoutRequestID": "ws_CO_9",
+                }
+            ),
         )
+        provider = daraja(session)
+        provider.create_payment(
+            amount_minor=10000,
+            currency="KES",
+            reference="attempt-9",
+            customer_phone="0722000099",
+            payload={},
+        )
+
+        _, stk = session.calls
+        prepared = requests.Request(
+            "POST",
+            f"{DarajaProvider.SANDBOX_BASE}/mpesa/stkpush/v1/processrequest",
+            json=stk["json"],
+            headers=stk.get("headers"),
+            auth=stk.get("auth"),
+        ).prepare()
+
+        self.assertEqual(prepared.headers["Authorization"], "Bearer token")
 
     def test_the_password_is_base64_of_shortcode_passkey_and_timestamp(self):
         session = self._session(
