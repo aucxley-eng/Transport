@@ -25,7 +25,8 @@ from apps.charter.models import (
     CharterReservation,
     HireRequest,
 )
-from apps.fleet.models import Document, Driver, Vehicle
+from apps.fleet.eligibility import valid_driver_ids
+from apps.fleet.models import Driver, Vehicle
 
 
 class CharterError(Exception):
@@ -68,19 +69,6 @@ def _overlaps(blocked_from, blocked_to):
     return CharterReservation.objects.filter(
         blocked_from__lt=blocked_to, blocked_to__gt=blocked_from
     )
-
-
-def _valid_driver_ids(today):
-    """Driver ids whose documents are all VERIFIED and unexpired (same rule as
-    on-demand dispatch, blueprint 8)."""
-    valid, invalid = set(), set()
-    for doc in Document.objects.filter(entity_type=Document.EntityType.DRIVER):
-        expired = doc.expires_on is not None and doc.expires_on < today
-        if doc.status == Document.Status.VERIFIED and not expired:
-            valid.add(doc.entity_id)
-        else:
-            invalid.add(doc.entity_id)
-    return valid - invalid
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +191,7 @@ def check_availability(
     drivers = Driver.objects.filter(status=Driver.Status.APPROVED).exclude(
         pk__in=busy_driver_ids
     )
-    document_ok = _valid_driver_ids(timezone.localdate())
+    document_ok = valid_driver_ids(timezone.localdate())
     if document_ok:
         drivers = drivers.filter(pk__in=list(document_ok))
 

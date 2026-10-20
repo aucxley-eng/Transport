@@ -2,7 +2,6 @@ import uuid
 
 from django.db import models
 from django.db.models import Q
-from django.utils import timezone
 
 
 class BaseModel(models.Model):
@@ -64,8 +63,3 @@ class OutboxEvent(BaseModel):
         indexes = [
             models.Index(fields=["state", "created_at"]),
         ]
-
-    def mark_published(self):
-        self.state = "published"
-        self.published_at = timezone.now()
-        self.save(update_fields=["state", "published_at", "updated_at"])

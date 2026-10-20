@@ -92,7 +92,9 @@ class QuoteViewSet(
 
     @action(detail=True, methods=["post"])
     def accept(self, request, pk=None):
-        """Accept a quote: idempotent and immutable after acceptance."""
+        """Accept a valid, unexpired quote. The transition is one-way: the quote
+        is immutable afterwards, and a second accept is refused rather than
+        treated as a repeat success."""
         quote = self.get_object()
         try:
             quote.accept()

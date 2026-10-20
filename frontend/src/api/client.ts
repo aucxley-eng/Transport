@@ -166,11 +166,3 @@ export async function getJson<T>(url: string, config?: AxiosRequestConfig): Prom
     throw new ApiError(describeError(error), error instanceof AxiosError ? (error.response?.status ?? null) : null);
   }
 }
-
-/** DRF's PageNumberPagination envelope. */
-export interface Paginated<T> {
-  count: number;
-  next: string | null;
-  previous: string | null;
-  results: T[];
-}

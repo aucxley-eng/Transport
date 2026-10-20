@@ -1,9 +1,9 @@
 """Test settings.
 
-Identical to development except that password hashing is cheap. The suite
-creates organizations, staff, drivers and senders in every test, and PBKDF2
-dominated the runtime (roughly four seconds per test). Hashing is not what these
-tests exercise, so the test run uses a fast hasher.
+Pin the database to SQLite and hash passwords cheaply. The suite creates
+organizations, staff, drivers and senders in every test, and PBKDF2 dominated
+the runtime (roughly four seconds per test). Hashing is not what these tests
+exercise, so the test run uses a fast hasher.
 
 The database is pinned to SQLite on purpose. Everything else is inherited from
 development, including the DB_ENGINE environment variable, so without this a

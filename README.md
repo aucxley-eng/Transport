@@ -11,9 +11,9 @@ Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides,
 | Component | State |
 |---|---|
 | `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
-| `frontend/` | Empty React-style directory tree (auth, driver, dispatch, parent pages; api, context, components, utils). No source files. |
+| `frontend/` | React + TypeScript + Vite back-office console: login behind an authenticated-redirect gate, a global error boundary, the dispatch shell, an auth context with token refresh, and an API client that clears tokens only on a definitive 401. Customer, driver and parent apps are not started. |
 | `infra/` | Empty. |
-| Tests | 369 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, frozen prices under insertion, and the nineteen courier invariants (per-parcel weight-band pricing, account rate-card resolution, per-parcel delivery proof, partial delivery, returns after a failed attempt, the mid-route insertion gate, and driver handovers). |
+| Tests | 480 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, frozen prices under insertion, the nineteen courier invariants (per-parcel weight-band pricing, account rate-card resolution, per-parcel delivery proof, partial delivery, returns after a failed attempt, the mid-route insertion gate, and driver handovers), row-locked fleet reservation so two dispatchers cannot double-book a vehicle or driver, per-compartment volume as well as weight, the payment provider seam (a real Safaricom Daraja adapter with OAuth and STK push that falls back to a credential-free stub, plus amount and state validation on the callback), the append-only double-entry ledger, revenue recognition when the transport obligation is fulfilled, and refunds that reverse through the ledger and can never be driven negative. |
 | Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3D of §9–10 are delivered. Remaining: intercity parcel hubs, warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
 
 ## Repository layout
@@ -24,11 +24,11 @@ Transport/
 ├── .env.example                                     # Django environment template
 ├── backend/                                         # API server (Django + DRF)
 │   ├── manage.py
-│   ├── config/settings/  (base, development, production, test)
+│   ├── config/settings/  (base, development, production, test, test_postgres)
 │   ├── requirements/     (base, development, production)
 │   └── tools/            (courier_smoke.py — real-HTTP end-to-end check, unused_imports.py)
 ├── frontend/                                        # Client applications
-│   └── src/  (api, context, pages, components, utils)
+│   └── src/  (api, context, components, pages/auth, pages/dispatch)
 └── infra/                                           # Infrastructure definitions (planned)
 ```
 
@@ -46,7 +46,7 @@ Transport/
 2. **Shared foundation** – identity, organizations, fleet, pricing, orders, permissions, audit, payment adapter. *(implemented)*
 3. **Passenger services** – scheduled booking, segment seats, manifests, rides, corporate approvals, charter. *(implemented: scheduled booking core, Envelope 2A on-demand rides, Envelope 2B corporate shuttles, Envelope 2C charter/hire)*
 4. **Goods and hubs** – courier, packages, freight, line-haul, custody, warehouse, returns. *(Envelope 3A implemented: single-owner freight booking, manifest reconciliation, custody chain, evidence, exceptions, linked returns. Envelope 3B implemented: consolidated shared load, validated and versioned plans, the coverage-floor departure gate, backhaul opportunities and the empty-running measure. Envelope 3C implemented: mid-route insertion that preserves completed stops, holds to a configured delay tolerance, and the driver-offer and manifest-amendment paths. Envelope 3D implemented: local courier with one pickup and many parcels, priced per parcel on weight bands and proved per parcel. Intercity parcel hubs and warehouse inventory remain — see [`docs/phase3a-scope.md`](./docs/phase3a-scope.md), [`docs/phase3b-scope.md`](./docs/phase3b-scope.md), [`docs/phase3c-scope.md`](./docs/phase3c-scope.md) and [`docs/phase3d-scope.md`](./docs/phase3d-scope.md))*
-5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting.
+5. **Operational and financial controls** – reconciliation, refunds, settlement, maintenance, incidents, reporting. *(partially implemented: a payment provider seam with a real Safaricom Daraja adapter, an append-only double-entry ledger, revenue recognition when the obligation is fulfilled, and refunds that reverse through the ledger. Reconciliation, settlement, maintenance, incidents and reporting remain.)*
 6. **Hardening and rollout** – load/security/restore tests, field pilot, gradual expansion.
 
 Planning envelope: roughly 8–14 months with an experienced multidisciplinary team; a limited production pilot can arrive earlier.
@@ -72,7 +72,7 @@ Run the test suite with the fast-hasher settings module:
 python manage.py test --settings=config.settings.test
 ```
 
-`config.settings.test` differs from development only in using a cheap password hasher; every test builds organizations, staff, drivers and senders, and PBKDF2 made the suite take minutes rather than seconds.
+`config.settings.test` pins the database to SQLite and uses a cheap password hasher; every test builds organizations, staff, drivers and senders, and PBKDF2 made the suite take minutes rather than seconds. The SQLite pin also stops a developer with production credentials in `.env` from running the suite against the hosted database.
 
 API docs are served at `/api/docs/` (DRF Spectacular).
 

@@ -7,25 +7,6 @@ class IsAuthenticated(permissions.IsAuthenticated):
     pass
 
 
-class IsOrganizationMember(permissions.BasePermission):
-    """Authenticated user must have an active membership in the target
-    organization (if one is specified on the view or in the URL)."""
-
-    message = "You are not a member of this organization."
-
-    def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated):
-            return False
-        return True
-
-    def has_object_permission(self, request, view, obj):
-        org = getattr(obj, "organization", None)
-        if org is None:
-            return True
-        org_id = org.pk if hasattr(org, "pk") else org
-        return org_id in organization_ids_for(request.user)
-
-
 class IsPlatformAdmin(permissions.BasePermission):
     message = "Platform administrator privileges required."
 

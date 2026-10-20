@@ -27,6 +27,7 @@ from django.utils.dateparse import parse_datetime
 
 from apps.catalog.models import Place, Service
 from apps.fleet.models import Vehicle
+from apps.goods.base import DROP_SERVICE_MINUTES
 from apps.goods.models import (
     ConsolidationPlan,
     ConsolidationStop,
@@ -249,8 +250,6 @@ def _drop_refusal(shipment, trip):
     overrun, rather than promised and missed. The driver's working day is already
     gated on the trip's own length, which bounds the stops inside it.
     """
-    from .courier import DROP_SERVICE_MINUTES
-
     stops = {
         place.pk
         for place, _, _ in _stops_for(shipment, trip.planned_start)

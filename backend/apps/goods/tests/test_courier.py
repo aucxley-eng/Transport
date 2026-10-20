@@ -26,8 +26,8 @@ from apps.goods.consolidation import (
     publish_plan,
     validate_plan,
 )
+from apps.goods.base import DROP_SERVICE_MINUTES
 from apps.goods.courier import (
-    DROP_SERVICE_MINUTES,
     book_courier_order,
     deliver_package,
     fail_delivery_attempt,

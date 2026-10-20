@@ -6,8 +6,15 @@ customer-journey screens, and the data-model inventory (p. 12) which names
 *ride requests*, *assignments, trips, stops, offers*, *shifts* and *zones*.
 Every invariant below is quoted from that blueprint; nothing here is invented.
 
+> Filename note: the file is called `phase2b-scope.md` but this document scopes
+> **Envelope 2A** (on-demand rides). It is kept under the original name so
+> existing links and the README continue to resolve.
+
 This is the second envelope. Envelope 1 (scheduled passenger booking) is
-delivered; corporate shuttles (2B) and charter/hire (Envelope 3) follow.
+delivered as of the writing of this document; corporate shuttles (2B) and
+charter/hire (2C) were delivered afterwards and never received scope
+documents of their own — see the two entries under "Explicitly out of scope"
+below for where their record actually lives.
 
 ## Goal
 
@@ -103,10 +110,16 @@ matching, privacy and failed-matching guarantees.
 - Driver availability: `POST /api/v1/driver/shift/`.
 
 ## Explicitly out of scope (deferred)
-- **Corporate travel and recurring shuttles (§8 second half)** — Envelope 2B;
-  it composes on `Departure`/`SeatHold`/`Ticket` and needs no new inventory
-  model.
-- **Charter and vehicle hire** — Envelope 3.
+- **Corporate travel and recurring shuttles (§8 second half)** — deferred from
+  this envelope to 2B, and later delivered as `apps/corporate` (employee
+  eligibility, cost centres, budgets, approval thresholds, travel requests,
+  shuttles, recurring roster and schedule templates producing dated
+  departures). No scope document was written for 2B; the implementation, its
+  tests and the README status table are the record.
+- **Charter and vehicle hire** — deferred from this envelope and later
+  delivered as Envelope 2C, `apps/charter` (hire requests, vehicle+driver
+  reservations covering travel and turnaround buffers, deposits, permitted
+  extras). No scope document was written for 2C; same note as above.
 - **Live GPS ingestion and background location tracking** (§14) — the model
   and read endpoints land here; the sampling/streaming pipeline does not.
 - **Push/SMS notification delivery** — outbox events are emitted; the actual

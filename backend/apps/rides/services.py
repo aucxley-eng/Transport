@@ -24,7 +24,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.catalog.models import build_quote
-from apps.fleet.models import Document, Driver, Vehicle
+from apps.fleet.eligibility import valid_driver_ids
+from apps.fleet.models import Driver, Vehicle
 from apps.rides.models import (
     DriverOffer,
     DriverShift,
@@ -47,21 +48,6 @@ class RideError(Exception):
 # ---------------------------------------------------------------------------
 # Eligibility
 # ---------------------------------------------------------------------------
-
-
-def _valid_driver_ids(today):
-    """Driver ids whose documents are all VERIFIED and unexpired.
-
-    "Document status" is part of the dispatch filter: an expired PSV licence or
-    insurance removes a driver from the pool immediately (blueprint 8)."""
-    valid, invalid = set(), set()
-    for doc in Document.objects.filter(entity_type=Document.EntityType.DRIVER):
-        expired = doc.expires_on is not None and doc.expires_on < today
-        if doc.status == Document.Status.VERIFIED and not expired:
-            valid.add(doc.entity_id)
-        else:
-            invalid.add(doc.entity_id)
-    return valid - invalid
 
 
 def eligible_drivers(ride_request):
@@ -95,7 +81,7 @@ def eligible_drivers(ride_request):
     )
 
     # Document status.
-    document_ok = _valid_driver_ids(today)
+    document_ok = valid_driver_ids(today)
     driver_ids = [d for d in driver_ids if d in document_ok]
     return list(Driver.objects.filter(pk__in=driver_ids).select_related("user"))
 

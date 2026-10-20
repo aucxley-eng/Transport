@@ -1,6 +1,6 @@
 # Envelope 3C scope: mid-route insertion and remaining-stop changes
 
-Status: scoped, product decisions recorded, ready to implement
+Status: delivered (Envelope 3C). Written when this was still "ready to implement"; the implementation and its tests are now the record. See the README status table.
 Blueprint: `Kenya_Transport_and_Logistics_Architecture.pdf` v1.0 — §9 freight procurement, §10 hubs and mixed operations, §11 dispatch routing
 Predecessor: `docs/phase3b-scope.md` (consolidated shared load, coverage floor, backhaul)
 

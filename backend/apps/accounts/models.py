@@ -135,16 +135,6 @@ class Role(models.TextChoices):
     FINANCE_OFFICER = "finance_officer", "Finance officer"
     PLATFORM_ADMIN = "platform_admin", "Platform administrator"
 
-    @classmethod
-    def elevated(cls):
-        """Roles that may manage records of an organization."""
-        return {
-            cls.OPERATOR_ADMIN,
-            cls.PLATFORM_ADMIN,
-            cls.DISPATCHER,
-            cls.FINANCE_OFFICER,
-        }
-
 
 class Membership(BaseModel):
     """A person's role within an organization. A user may hold several."""
@@ -179,9 +169,3 @@ def organization_ids_for(user):
     return list(
         user.memberships.filter(is_active=True).values_list("organization_id", flat=True)
     )
-
-
-def is_role(user, organization_id, role):
-    return user.memberships.filter(
-        is_active=True, organization_id=organization_id, role=role
-    ).exists()

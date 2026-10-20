@@ -15,13 +15,13 @@ what to do, not a code.
 
 from decimal import Decimal
 
-from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.catalog.models import Place, Quote, Service, build_quote
 from apps.catalog.tariff import band_for, resolve_rate_card, weight_bands
 from apps.common.outbox import record_outbox
 
+from .base import place_or_none, refresh_order_status
 from .models import (
     VOLUMETRIC_DIVISOR_CM3_PER_KG,
     CustodyEvent,
@@ -30,7 +30,6 @@ from .models import (
     Package,
     Shipment,
     ShipmentEvidence,
-    ShipmentException,
     ShipmentLeg,
 )
 from .services import (
@@ -52,36 +51,12 @@ ZERO = Decimal("0")
 # rather than quietly treated as same-day work.
 COURIER_SERVICE_TYPES = (Service.ServiceType.COURIER,)
 
-# A drop costs the driver time whatever the parcel weighs, so a route of many
-# drops is bounded by the clock. Reused by the plan's route-time check.
-DROP_SERVICE_MINUTES = 5
-
 # What a caller gets instead of a price when there is no tariff to price from.
 REASON_NO_TARIFF = "no rate card is in force for this service"
 
 
 def is_courier_service(service):
     return service is not None and service.service_type in COURIER_SERVICE_TYPES
-
-
-def is_multi_drop(shipment):
-    """Whether this order names its recipients on the parcels rather than on
-    the order, which is what makes a delivery provable parcel by parcel."""
-    return shipment.packages.filter(recipient_place__isnull=False).exists()
-
-
-def _place(value):
-    """Look up a place by id, treating an absent or malformed id as no place.
-
-    A caller sends ids as strings over JSON, so a blank or mistyped one has to
-    come back as a refusal naming the parcel, not as a database error.
-    """
-    if not value:
-        return None
-    try:
-        return Place.objects.filter(pk=value).first()
-    except (ValueError, TypeError, ValidationError):
-        return None
 
 
 def _parcel_specs(packages):
@@ -98,7 +73,7 @@ def _parcel_specs(packages):
             raise GoodsError(f"Parcel {index} is not a valid description.")
         recipient_name = str(spec.get("recipient_name") or "").strip()
         recipient_phone = str(spec.get("recipient_phone") or "").strip()
-        place = _place(spec.get("recipient_place"))
+        place = place_or_none(spec.get("recipient_place"))
         if not recipient_name:
             raise GoodsError(f"Parcel {index} needs the name of the person it is for.")
         if not recipient_phone:
@@ -315,8 +290,8 @@ def book_courier_order(
         )
 
     payload = quote.request_payload
-    collection = _place(payload.get("collection_id"))
-    destination = _place(payload.get("destination_id"))
+    collection = place_or_none(payload.get("collection_id"))
+    destination = place_or_none(payload.get("destination_id"))
     if collection is None or destination is None:
         raise GoodsError("The collection and destination places are no longer available.")
     window_start = _aware(payload.get("service_window_start"), "service_window_start")
@@ -359,7 +334,7 @@ def book_courier_order(
         package = _create_package(order, parcel)
         package.recipient_name = parcel["recipient_name"]
         package.recipient_phone = parcel["recipient_phone"]
-        package.recipient_place = _place(parcel["recipient_place"])
+        package.recipient_place = place_or_none(parcel["recipient_place"])
         package.chargeable_weight_kg = _decimal(
             parcel.get("chargeable_weight_kg"), "chargeable_weight_kg"
         ) or ZERO
@@ -485,55 +460,6 @@ def drop_places(shipment):
         ).order_by("name", "pk")
     )
     return [shipment.collection] + [p for p in drops if p.pk != shipment.collection_id]
-
-
-def refresh_order_status(order, now=None):
-    """Keep the order's status honest as its parcels move.
-
-    A courier order closes only when every parcel is delivered, returned or
-    recorded missing; until then it is partially delivered, so the outstanding
-    parcels stay visible (blueprint 9: "Partial deliveries remain visible at
-    package level").
-
-    An open exception outranks the parcel count: something is wrong on this
-    order and the status has to say so. An exception that has been resolved
-    stops hiding the progress underneath it, so a delivered parcel is still
-    visible as delivered rather than the order sitting at "exception" forever.
-    """
-    now = now or _now()
-    packages = list(order.packages.all())
-    if not packages:
-        return order
-    delivered = sum(1 for p in packages if p.status == Package.Status.DELIVERED)
-    returned = sum(1 for p in packages if p.status == Package.Status.RETURNED)
-    missing = sum(1 for p in packages if p.status == Package.Status.MISSING)
-    moving = sum(
-        1 for p in packages if p.status in (Package.Status.IN_TRANSIT, Package.Status.LOADED)
-    )
-    if order.exceptions.filter(status=ShipmentException.Status.OPEN).exists():
-        status = Shipment.Status.EXCEPTION
-    elif delivered + returned + missing == len(packages):
-        status = Shipment.Status.DELIVERED
-    elif delivered or returned or missing:
-        status = Shipment.Status.PARTIALLY_DELIVERED
-    elif moving:
-        status = Shipment.Status.IN_TRANSIT
-    else:
-        return order
-    if status != order.status:
-        order.status = status
-        order.save(update_fields=["status", "updated_at"])
-    # A fully delivered shipment satisfies its commercial order. That is the
-    # point the order's collected money is earned rather than held, so it is
-    # completed here; the payments side recognises the revenue from the
-    # delivery outbox event. A shipment with no order (the common case for a
-    # direct courier booking) has nothing to settle.
-    if status == Shipment.Status.DELIVERED and order.order_id is not None:
-        from apps.orders.models import Order
-
-        if order.order.status == Order.Status.CONFIRMED:
-            order.order.complete()
-    return order
 
 
 @transaction.atomic

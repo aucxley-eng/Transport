@@ -15,8 +15,9 @@ from rest_framework.response import Response
 from apps.accounts.models import Role, organization_ids_for
 from apps.accounts.permissions import IsAuthenticated
 from apps.audit.models import record_audit
-from apps.catalog.models import Place, Quote, Service
+from apps.catalog.models import Quote, Service
 from apps.fleet.models import Driver, Vehicle
+from apps.goods.base import place_or_none
 from apps.goods.consolidation import (
     FreightError,
     assess_coverage,
@@ -92,19 +93,6 @@ def _err(exc):
     return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-def _place(value):
-    """A place by id, or None.
-
-    A body that carries "not-a-uuid" is a bad request, not a server error, so the
-    lookup refuses to hand a ValidationError out of the view. The service layers
-    then report the missing place by name, the way every other refusal reads.
-    """
-    try:
-        return Place.objects.filter(pk=value).first()
-    except (TypeError, ValueError, ValidationError):
-        return None
-
-
 class _OrgScopedViewSet(viewsets.GenericViewSet):
     """Query set always constrained to the caller's organizations (operator
     isolation, blueprint 3)."""
@@ -172,8 +160,8 @@ class ShipmentViewSet(
                 return _err(GoodsError(str(exc)))
         service = Service.objects.filter(pk=quote.service_id).first()
         organization = _organization_for(request, quote.organization_id)
-        collection = _place(request.data.get("collection"))
-        destination = _place(request.data.get("destination"))
+        collection = place_or_none(request.data.get("collection"))
+        destination = place_or_none(request.data.get("destination"))
         try:
             shipment = create_shipment(
                 quote=quote,
@@ -237,8 +225,8 @@ class ShipmentViewSet(
             pk=request.data.get("service"), service_type=Service.ServiceType.COURIER
         ).first()
         organization = _organization_for(request, None)
-        collection = _place(request.data.get("collection"))
-        destination = _place(request.data.get("destination"))
+        collection = place_or_none(request.data.get("collection"))
+        destination = place_or_none(request.data.get("destination"))
         try:
             quote = quote_courier_order(
                 organization=organization,
@@ -276,8 +264,8 @@ class ShipmentViewSet(
             pk=request.data.get("service"), service_type=Service.ServiceType.FREIGHT
         ).first()
         organization = _organization_for(request, None)
-        collection = _place(request.data.get("collection"))
-        destination = _place(request.data.get("destination"))
+        collection = place_or_none(request.data.get("collection"))
+        destination = place_or_none(request.data.get("destination"))
         try:
             quote = quote_shipment(
                 organization=organization,
@@ -447,7 +435,7 @@ class PackageViewSet(
         corrects = CustodyEvent.objects.filter(
             pk=request.data.get("corrects_event")
         ).first()
-        location = _place(request.data.get("location"))
+        location = place_or_none(request.data.get("location"))
         try:
             event = record_custody_event(
                 package,
@@ -587,8 +575,8 @@ class FreightTripViewSet(
                 vehicle=vehicle,
                 driver=driver,
                 service=service,
-                origin=_place(request.data.get("origin")),
-                destination=_place(request.data.get("destination")),
+                origin=place_or_none(request.data.get("origin")),
+                destination=place_or_none(request.data.get("destination")),
                 planned_start=request.data.get("planned_start"),
                 planned_end=request.data.get("planned_end"),
             )
@@ -879,7 +867,7 @@ class BackhaulViewSet(_OrgScopedViewSet, mixins.ListModelMixin):
     def list(self, request):
         from apps.catalog.models import Place
 
-        origin = _place(request.query_params.get("origin"))
+        origin = place_or_none(request.query_params.get("origin"))
         destination = Place.objects.filter(
             pk=request.query_params.get("destination")
         ).first()

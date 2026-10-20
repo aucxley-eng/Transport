@@ -7,9 +7,8 @@
  * feature adds its own alongside its pages.
  *
  * The string unions mirror the backend enums exactly -- `Role` in
- * apps/accounts/models.py:125, `Organization.Approval` and `.Type` further up
- * the same file. If they drift, TypeScript will not catch it, so a change there
- * is a change here.
+ * apps/accounts/models.py:125. If they drift, TypeScript will not catch it, so a
+ * change there is a change here.
  */
 
 export type Role =
@@ -24,12 +23,6 @@ export type Role =
   | "support_agent"
   | "finance_officer"
   | "platform_admin";
-
-export type OrganizationApproval =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "suspended";
 
 /** What `GET /api/v1/me/` returns, including the caller's memberships. */
 export interface Membership {

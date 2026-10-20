@@ -17,6 +17,7 @@ from django.utils.dateparse import parse_datetime
 
 from apps.catalog.models import Quote, Service, build_quote
 from apps.fleet.models import Driver, Vehicle
+from apps.goods.base import refresh_order_status
 from apps.goods.models import (
     CustodyEvent,
     FreightTrip,
@@ -1150,8 +1151,6 @@ def create_return_shipment(shipment, *, packages, reason="", service=None, terms
     # just moved. A courier order whose last outstanding parcel was sent back must
     # stop reading "exception" and say where it really is, or dispatch keeps
     # chasing a problem the return already answered.
-    from .courier import refresh_order_status  # local: courier imports this module
-
     shipment.refresh_from_db()
     refresh_order_status(shipment)
     return return_shipment

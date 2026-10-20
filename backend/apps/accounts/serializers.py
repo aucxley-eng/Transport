@@ -28,11 +28,6 @@ class RegisterSerializer(serializers.Serializer):
         )
 
 
-class TokenSerializer(serializers.Serializer):
-    refresh = serializers.CharField(read_only=True)
-    access = serializers.CharField(read_only=True)
-
-
 class MembershipSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source="organization.name", read_only=True)
     organization_slug = serializers.CharField(source="organization.slug", read_only=True)

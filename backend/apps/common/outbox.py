@@ -18,10 +18,6 @@ logger = logging.getLogger(__name__)
 _SUBSCRIBERS = {}
 
 
-class OutboxError(Exception):
-    pass
-
-
 def subscribe(event_type):
     """Register a subscriber for an event type. Subscribers are idempotent
     handlers that receive the serialized OutboxEvent dict."""

@@ -266,10 +266,6 @@ class Package(BaseModel):
     def __str__(self):
         return f"{self.label} ({self.status})"
 
-    def is_multi_drop(self):
-        """Whether this parcel is delivered on its own, to its own recipient."""
-        return bool(self.recipient_name or self.recipient_place_id)
-
     def chargeable_weight(self):
         """The weight this parcel is charged on: the greater of its actual mass
         and its volumetric weight, so a light bulky box pays for its size."""
