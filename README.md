@@ -26,7 +26,7 @@ Transport/
 │   ├── manage.py
 │   ├── config/settings/  (base, development, production, test, test_postgres)
 │   ├── requirements/     (base, development, production)
-│   └── tools/            (courier_smoke.py — real-HTTP end-to-end check, unused_imports.py)
+│   └── tools/            (courier_smoke.py — real-HTTP end-to-end check; mpesa_stk_push.py — live Daraja Stage A; unused_imports.py)
 ├── frontend/                                        # Client applications
 │   └── src/  (api, context, components, pages/auth, pages/dispatch)
 └── infra/                                           # Infrastructure definitions (planned)
