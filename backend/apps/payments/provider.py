@@ -349,8 +349,12 @@ class DarajaProvider(PaymentProvider):
 
     def query_payment(self, provider_reference):
         timestamp = stk_timestamp()
+        # The query endpoint spells this field differently from the push,
+        # capital C and all: sending the push's spelling is answered with
+        # Daraja's generic 400.002.02 naming BusinessShortCode, which reads
+        # like a bad shortcode when it is a bad field name.
         body = {
-            "BusinessShortcode": self.shortcode,
+            "BusinessShortCode": self.shortcode,
             "Password": self._stk_credentials(timestamp),
             "Timestamp": timestamp,
             "CheckoutRequestID": provider_reference,

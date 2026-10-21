@@ -391,6 +391,37 @@ class RequestBuildingTestCase(APITestCase):
         self.assertEqual(len(oauth_calls), 1, "the token must be cached")
 
 
+    def test_a_query_uses_the_capitalised_shortcode_field(self):
+        """Daraja spells this field differently on the query than on the push.
+
+        The push takes ``BusinessShortcode``; the query endpoint takes
+        ``BusinessShortCode``. Its 400.002.02 is a generic payload error that
+        names whatever it dislikes, so sending the push's spelling here reads
+        as "Invalid BusinessShortCode" and every query fails, leaving the
+        caller with "unknown" for an outcome that is knowable. Proven live: the
+        same checkout answered "No response from user" as soon as the
+        capitalised spelling was used.
+        """
+
+        session = RecordingSession(
+            FakeResponse(200, {"access_token": "token", "expires_in": "3599"}),
+            FakeResponse(200, {"ResultCode": 0, "ResultDesc": "processed"}),
+        )
+        provider = daraja(session)
+
+        self.assertEqual(provider.query_payment("ws_CO_1"), "success")
+
+        oauth, query = session.calls
+        body = query["json"]
+        self.assertEqual(
+            query["url"], f"{DarajaProvider.SANDBOX_BASE}/mpesa/stkpushquery/v1/query"
+        )
+        self.assertIn("BusinessShortCode", body)
+        self.assertNotIn("BusinessShortcode", body)
+        self.assertEqual(body["BusinessShortCode"], "174379")
+        self.assertEqual(body["CheckoutRequestID"], "ws_CO_1")
+
+
 class CallbackParsingTestCase(APITestCase):
     """Both callback shapes land on the same four-value contract."""
 
