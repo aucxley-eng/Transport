@@ -1,10 +1,11 @@
 """Stage A of a live M-PESA proof: a real Daraja OAuth + STK push.
 
-This exists because Safaricom cannot POST a callback to localhost, and because
-Safaricom's Imperva edge rejects a scripted request to the OAuth path from some
-networks (it returned an empty HTTP 400 to every shape we tried from one
-host). Run it from a connection Imperva accepts and paste the output back; the
-callback half is then delivered by hand to the live webhook endpoint.
+This covers only the push half. Safaricom cannot POST a callback to localhost,
+and it also rejects a callback URL that is not HTTPS, so closing the loop needs
+a public HTTPS endpoint to call back into -- a tunnel in local development,
+which is why the reference integrations run ngrok. Given one, put its
+`https://` URL in `MPESA_CALLBACK_URL`, push, and the result arrives at
+`/api/v1/webhooks/mpesa/` on the running server.
 
     python3 tools/mpesa_stk_push.py --phone 0796606363 --amount 1
     python3 tools/mpesa_stk_push.py --query ws_CO_...

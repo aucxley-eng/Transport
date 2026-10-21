@@ -102,6 +102,42 @@ the other half of the life cycle.
   provisional. Get the real chart of accounts agreed and encode it once in one
   place (a `ledger` module), not scattered literals.
 
+### Live M-PESA proof — Stage A done, Stage B needs a tunnel
+
+Proven against the real sandbox (`tools/mpesa_stk_push.py`): OAuth returns a
+token, and an STK push is accepted with a real `CheckoutRequestID`
+(`ws_CO_211020261821027796606363`, 21 October 2026). With the server running,
+`POST /api/v1/webhooks/mpesa/` answers `202`, and four tests
+(`HttpDarajaCallbackTestCase`) exercise the callback → ledger → `Order.CONFIRMED`
+path using the genuine `stkCallback` shape.
+
+What blocked every attempt before that, and what still blocks Stage B:
+
+- **`CallBackURL` must be HTTPS.** `http://localhost:8000/...` is rejected.
+  Daraja's `400.002.02` is a *generic* payload error — its description in the
+  docs reads "Bad Request – Invalid **XXXX**" — and it reported the failure as
+  `Invalid BusinessShortCode` and later `Invalid CallBackURL` for the same
+  request. Do not trust the field name it names.
+- **Stage B needs a public HTTPS endpoint.** Put an `https://` URL (a tunnel;
+  the reference integrations run ngrok) in `MPESA_CALLBACK_URL`, push, approve
+  the prompt on the handset, and the result lands on the live webhook.
+- **Back off between calls.** Daraja enforces a spike arrest of 30 messages a
+  minute with a burst of 3; hammering returns `429` and wastes the window.
+
+Two known defects, deliberately left unfixed for now and recorded here rather
+than silently:
+
+- `DarajaProvider` accepts a non-HTTPS `CallBackURL`, which is fatally wrong on
+  Safaricom's side but reported as an unrelated-looking error.
+- `TransactionDesc` is sent at 17 characters (documented maximum is 13) and
+  `AccountReference` is not length-checked (maximum 12). Neither has been
+  observed to be the cause of a rejection.
+
+`.env` still carries `http://localhost:8000/...`; the committed tests do not
+need it because the callback half is delivered in-process. And note
+`config.settings.development` points at the hosted Supabase database — never
+seed payment test data through a running dev server.
+
 ### A4. Settlement and payouts
 
 - Settlement batches: eligible service items (fares earned, fees, cash offsets,
