@@ -222,11 +222,11 @@ class RequestBuildingTestCase(APITestCase):
 
         body = stk["json"]
         self.assertEqual(stk["url"], f"{DarajaProvider.SANDBOX_BASE}/mpesa/stkpush/v1/processrequest")
-        self.assertEqual(body["BusinessShortcode"], "174379")
+        self.assertEqual(body["BusinessShortcode"], 174379)
         self.assertEqual(body["Amount"], 300)  # whole shillings, not minor
         self.assertEqual(body["PartyA"], "254722000099")
         self.assertEqual(body["PhoneNumber"], "254722000099")
-        self.assertEqual(body["PartyB"], "174379")
+        self.assertEqual(body["PartyB"], 174379)
         self.assertEqual(body["TransactionType"], "CustomerPayBillOnline")
         self.assertEqual(body["CallBackURL"], CREDENTIALS["MPESA_CALLBACK_URL"])
         self.assertEqual(body["AccountReference"], "attempt-1")
@@ -418,7 +418,7 @@ class RequestBuildingTestCase(APITestCase):
         )
         self.assertIn("BusinessShortCode", body)
         self.assertNotIn("BusinessShortcode", body)
-        self.assertEqual(body["BusinessShortCode"], "174379")
+        self.assertEqual(body["BusinessShortCode"], 174379)
         self.assertEqual(body["CheckoutRequestID"], "ws_CO_1")
 
 

@@ -314,14 +314,15 @@ class DarajaProvider(PaymentProvider):
             )
 
         timestamp = stk_timestamp()
+        shortcode = int(self.shortcode)
         body = {
-            "BusinessShortcode": self.shortcode,
+            "BusinessShortcode": shortcode,
             "Password": self._stk_credentials(timestamp),
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
             "Amount": amount_minor // 100,
             "PartyA": msisdn,
-            "PartyB": self.shortcode,
+            "PartyB": shortcode,
             "PhoneNumber": msisdn,
             "CallBackURL": self.callback_url,
             "AccountReference": str(reference)[:12],
@@ -354,7 +355,7 @@ class DarajaProvider(PaymentProvider):
         # Daraja's generic 400.002.02 naming BusinessShortCode, which reads
         # like a bad shortcode when it is a bad field name.
         body = {
-            "BusinessShortCode": self.shortcode,
+            "BusinessShortCode": int(self.shortcode),
             "Password": self._stk_credentials(timestamp),
             "Timestamp": timestamp,
             "CheckoutRequestID": provider_reference,
