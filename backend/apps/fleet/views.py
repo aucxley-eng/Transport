@@ -4,7 +4,12 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from apps.accounts.models import Role, organization_ids_for
+from apps.accounts.models import (
+    Role,
+    branch_ids_for,
+    can_view_all_branches,
+    organization_ids_for,
+)
 from apps.accounts.permissions import IsAuthenticated, IsOrganizationAdmin
 from apps.audit.models import record_audit
 from apps.common.models import OrganizationScopedQuerySet
@@ -26,7 +31,25 @@ class _OrgScopedViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         if not isinstance(qs, OrganizationScopedQuerySet):
             return qs
-        return qs.for_organizations(organization_ids_for(self.request.user))
+        qs = qs.for_organizations(organization_ids_for(self.request.user))
+        if not hasattr(qs.model, "branch"):
+            return qs
+        branch = self.request.query_params.get("branch")
+        scoped = None
+        if not can_view_all_branches(self.request.user):
+            scoped = branch_ids_for(self.request.user)
+        if branch:
+            qs = qs.filter(branch_id=branch)
+            if scoped is not None:
+                qs = qs.filter(branch_id__in=scoped)
+        elif scoped is not None:
+            from django.db.models import Q
+
+            if scoped:
+                qs = qs.filter(Q(branch_id__in=scoped) | Q(branch__isnull=True))
+            else:
+                qs = qs.filter(branch__isnull=True)
+        return qs
 
     def _require_admin(self, org_id):
         """Reject a write whose target organization the caller does not

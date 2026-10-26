@@ -23,6 +23,14 @@ class Route(BaseModel):
     )
     name = models.CharField(max_length=160)
     description = models.TextField(blank=True)
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="routes",
+        help_text="Owning branch. Null means a network-wide route.",
+    )
     is_active = models.BooleanField(default=True)
 
     objects = OrganizationScopedQuerySet.as_manager()
@@ -86,6 +94,14 @@ class Departure(BaseModel):
         help_text="Purchasable catalog service this departure fulfils.",
     )
     route = models.ForeignKey(Route, on_delete=models.PROTECT, related_name="departures")
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="departures",
+        help_text="Operating branch that runs this departure.",
+    )
     vehicle = models.ForeignKey(
         "fleet.Vehicle",
         null=True,
@@ -240,6 +256,14 @@ class Ticket(BaseModel):
     )
     reference = models.CharField(max_length=24, unique=True, db_index=True)
     token = models.CharField(max_length=64, unique=True, db_index=True)
+    selling_branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tickets_sold",
+        help_text="Branch that sold the ticket, which may differ from the operating branch.",
+    )
     seat_number = models.PositiveSmallIntegerField()
     passenger_name = models.CharField(max_length=160)
     passenger_phone = models.CharField(max_length=16)

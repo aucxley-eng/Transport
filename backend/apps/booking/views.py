@@ -1,12 +1,21 @@
+import uuid
 from datetime import date as date_cls
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import Role, organization_ids_for
+from apps.accounts.models import (
+    Branch,
+    Role,
+    branch_ids_for,
+    default_branch_for,
+    is_platform_admin,
+    organization_ids_for,
+)
 from apps.accounts.permissions import IsAuthenticated, IsOrganizationAdmin
 from apps.audit.models import record_audit
 from apps.booking.models import (
@@ -42,7 +51,11 @@ class _OrgScopedViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.for_organizations(organization_ids_for(self.request.user))
+        qs = qs.for_organizations(organization_ids_for(self.request.user))
+        branch = self.request.query_params.get("branch")
+        if branch and hasattr(qs.model, "branch"):
+            qs = qs.filter(branch_id=branch)
+        return qs
 
     def _require_admin(self, org_id):
         from rest_framework.exceptions import PermissionDenied
@@ -127,11 +140,79 @@ class TicketViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        qs = Ticket.objects.select_related("departure")
-        if self.request.user.is_superuser:
-            return qs
-        org_ids = organization_ids_for(self.request.user)
-        return qs.filter(departure__organization_id__in=org_ids)
+        qs = (
+            Ticket.objects.select_related(
+                "departure__route",
+                "departure__organization",
+                "departure__vehicle",
+                "departure__branch",
+                "selling_branch",
+                "hold__order",
+            )
+            .prefetch_related(
+                "departure__route__stops__place",
+                "hold__segments__segment__from_place",
+                "hold__segments__segment__to_place",
+            )
+        )
+        if not self.request.user.is_superuser:
+            org_ids = organization_ids_for(self.request.user)
+            qs = qs.filter(departure__organization_id__in=org_ids)
+
+        if not (
+            self.request.user.is_superuser or is_platform_admin(self.request.user)
+        ):
+            visible_branches = branch_ids_for(self.request.user)
+            admin_org_ids = list(
+                self.request.user.memberships.filter(
+                    is_active=True, role=Role.OPERATOR_ADMIN
+                ).values_list("organization_id", flat=True)
+            )
+            if self.request.query_params.get("view") == "operations":
+                qs = qs.filter(
+                    Q(departure__organization_id__in=admin_org_ids)
+                    | Q(departure__branch_id__in=visible_branches)
+                )
+            else:
+                qs = qs.filter(
+                    Q(departure__organization_id__in=admin_org_ids)
+                    | Q(selling_branch_id__in=visible_branches)
+                    | Q(hold__order__customer=self.request.user)
+                )
+
+        branch_id = self.request.query_params.get("branch")
+        if branch_id:
+            try:
+                branch_uuid = uuid.UUID(branch_id)
+            except (TypeError, ValueError):
+                return qs.none()
+            qs = qs.filter(selling_branch_id=branch_uuid)
+
+        operating_branch = self.request.query_params.get("operating_branch")
+        if operating_branch:
+            try:
+                branch_uuid = uuid.UUID(operating_branch)
+            except (TypeError, ValueError):
+                return qs.none()
+            qs = qs.filter(departure__branch_id=branch_uuid)
+
+        order_id = self.request.query_params.get("order")
+        if order_id:
+            try:
+                order_uuid = uuid.UUID(order_id)
+            except (TypeError, ValueError):
+                return qs.none()
+            qs = qs.filter(hold__order_id=order_uuid)
+
+        departure_id = self.request.query_params.get("departure")
+        if departure_id:
+            try:
+                departure_uuid = uuid.UUID(departure_id)
+            except (TypeError, ValueError):
+                return qs.none()
+            qs = qs.filter(departure_id=departure_uuid)
+
+        return qs
 
 
 class SearchView(APIView):
@@ -224,6 +305,43 @@ class HoldView(APIView):
         )
 
 
+class SeatMapView(APIView):
+    """Seat map for a departure/leg showing free/taken/held seats."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        departure = Departure.objects.filter(pk=request.query_params.get("departure")).first()
+        if departure is None:
+            return Response({"detail": "Departure not found."}, status=status.HTTP_404_NOT_FOUND)
+        from_place = Place.objects.filter(pk=request.query_params.get("from_place")).first()
+        to_place = Place.objects.filter(pk=request.query_params.get("to_place")).first()
+        if from_place is None or to_place is None:
+            return Response(
+                {"detail": "Valid from_place and to_place are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from apps.booking.services import _occupied_seat_numbers, _resolve_segment_positions
+
+        positions = _resolve_segment_positions(departure, from_place, to_place)
+        taken = _occupied_seat_numbers(departure, positions)
+        capacity = departure.capacity or 0
+        seats = []
+        for seat in range(1, capacity + 1):
+            state = "taken" if seat in taken else "free"
+            seats.append({"number": seat, "state": state})
+        return Response(
+            {
+                "departure": str(departure.pk),
+                "from_place": str(from_place.pk),
+                "to_place": str(to_place.pk),
+                "capacity": capacity,
+                "seats": seats,
+                "free": capacity - len(taken),
+            }
+        )
+
+
 class CheckoutView(APIView):
     """Convert held seats into a pay-ready Order (blueprint 7 flow:
     select seat -> hold -> pay -> ticket)."""
@@ -241,6 +359,31 @@ class CheckoutView(APIView):
             )
         hold_ids = request.data.get("hold_ids") or []
         holds = list(SeatHold.objects.filter(pk__in=hold_ids))
+
+        selling_branch = None
+        branch_id = request.data.get("selling_branch")
+        if branch_id:
+            selling_branch = Branch.objects.filter(
+                pk=branch_id, organization=departure.organization
+            ).first()
+            if selling_branch is None:
+                return Response(
+                    {"detail": "Selling branch must belong to this organisation."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not is_platform_admin(request.user) and not request.user.is_superuser:
+                if str(selling_branch.pk) not in branch_ids_for(request.user):
+                    return Response(
+                        {"detail": "You cannot sell from this branch."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+        elif request.user.memberships.filter(
+            is_active=True, organization=departure.organization
+        ).exists():
+            selling_branch = default_branch_for(
+                request.user, departure.organization_id
+            )
+
         try:
             order = create_booking_order(
                 departure=departure,
@@ -249,6 +392,7 @@ class CheckoutView(APIView):
                 passenger_phone=request.data.get("passenger_phone", ""),
                 passenger_id_number=request.data.get("passenger_id_number", ""),
                 customer=request.user,
+                selling_branch=selling_branch,
             )
         except BookingError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

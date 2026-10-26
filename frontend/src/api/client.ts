@@ -75,15 +75,15 @@ async function refreshAccessToken(): Promise<string> {
 
 api.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError) => {
-    const config = error.config as RetryableConfig | undefined;
-    const status = error.response?.status;
+  async (error) => {
+    const axiosErr = error as AxiosError; const config = axiosErr.config as RetryableConfig | undefined;
+    const status = axiosErr.response?.status;
     const url = config?.url ?? "";
 
     // Only a genuine 401 is refreshable, and never the refresh endpoint itself.
     const isRefreshCall = url.includes("/auth/token/");
     if (status !== 401 || config === undefined || config._retry || isRefreshCall) {
-      return Promise.reject(error);
+      return Promise.reject(axiosErr);
     }
 
     config._retry = true;
@@ -165,4 +165,46 @@ export async function getJson<T>(url: string, config?: AxiosRequestConfig): Prom
   } catch (error) {
     throw new ApiError(describeError(error), error instanceof AxiosError ? (error.response?.status ?? null) : null);
   }
+}
+
+
+/** POST helper that unwraps `data` and normalises failures to ApiError. */
+export async function postJson<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  try {
+    const { data } = await api.post<T>(url, body, config);
+    return data;
+  } catch (error) {
+    throw new ApiError(describeError(error), error instanceof AxiosError ? (error.response?.status ?? null) : null);
+  }
+}
+
+/** PATCH helper that unwraps `data` and normalises failures to ApiError. */
+export async function patchJson<T>(url: string, body?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  try {
+    const { data } = await api.patch<T>(url, body, config);
+    return data;
+  } catch (error) {
+    throw new ApiError(describeError(error), error instanceof AxiosError ? (error.response?.status ?? null) : null);
+  }
+}
+
+/** DELETE helper that unwraps `data` and normalises failures to ApiError. */
+export async function deleteJson<T = void>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  try {
+    const { data } = await api.delete<T>(url, config);
+    return data;
+  } catch (error) {
+    throw new ApiError(describeError(error), error instanceof AxiosError ? (error.response?.status ?? null) : null);
+  }
+}
+
+export async function getList<T>(url: string, config?: AxiosRequestConfig): Promise<{ count: number; results: T[] }> {
+  const { data } = await api.get<{ count: number; results: T[] }>(url, config);
+  if (Array.isArray(data)) {
+    return { count: data.length, results: data };
+  }
+  if (Array.isArray((data as any)?.results)) {
+    return data as { count: number; results: T[] };
+  }
+  return { count: 0, results: [] };
 }

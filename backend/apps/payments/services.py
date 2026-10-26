@@ -493,3 +493,73 @@ def _issue_booking_tickets(attempt):
             reason="Seat hold expired before payment settled; refund/rebook required.",
         )
     return tickets
+
+
+@transaction.atomic
+def record_cash_collection(
+    *,
+    order,
+    actor,
+    amount_minor=None,
+    currency=None,
+    idempotency_key=None,
+    note="",
+):
+    """Settle an order paid in cash at a counter.
+
+    Cash is not a provider: there is no external reference to wait for, so the
+    collection is recorded and applied in one transaction. The amount must
+    match the order exactly, and the order must still be awaiting payment --
+    otherwise a second counter clerk could collect twice for one order. A
+    repeated idempotency key returns the first attempt unchanged.
+    """
+    if order is None:
+        raise PaymentError("Order not found.")
+    amount = order.total_minor if amount_minor is None else amount_minor
+    unit = currency or order.currency
+    if amount != order.total_minor or unit != order.currency:
+        raise PaymentError(
+            f"Cash amount must match the order total "
+            f"({order.total_minor} {order.currency})."
+        )
+
+    key = idempotency_key or uuid.uuid4()
+    existing = PaymentAttempt.objects.filter(provider="cash", idempotency_key=key).first()
+    if existing is not None:
+        if existing.order_id != order.pk:
+            raise PaymentError("Idempotency key belongs to a different order.")
+        return existing, False
+
+    if order.status != Order.Status.CREATED:
+        raise PaymentError("This order is already paid or closed.")
+
+    attempt = PaymentAttempt.objects.create(
+        organization=order.organization,
+        branch=order.branch,
+        order=order,
+        provider="cash",
+        idempotency_key=key,
+        expected_amount_minor=amount,
+        currency=unit,
+        provider_reference=f"CASH-{uuid.uuid4().hex[:12].upper()}",
+        state=PaymentAttempt.State.SUCCESS,
+        result_received=True,
+        note=note,
+    )
+    _post_collection(attempt)
+    _confirm_order(order)
+    _issue_booking_tickets(attempt)
+    record_audit(
+        actor=actor,
+        organization=attempt.organization,
+        action="payment.cash_recorded",
+        entity_type="payment_attempt",
+        entity_id=attempt.pk,
+        new_value={
+            "order": str(order.pk),
+            "amount_minor": amount,
+            "currency": unit,
+            "reference": attempt.provider_reference,
+        },
+    )
+    return attempt, True

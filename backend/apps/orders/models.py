@@ -24,6 +24,14 @@ class Order(BaseModel):
     customer = models.ForeignKey(
         "accounts.User", on_delete=models.PROTECT, related_name="orders"
     )
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orders",
+        help_text="Selling branch for counter and branch-originated orders.",
+    )
     service = models.ForeignKey(
         "catalog.Service", on_delete=models.PROTECT, related_name="orders"
     )

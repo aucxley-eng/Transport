@@ -30,6 +30,7 @@ from apps.booking.models import (
     SeatHold,
     Ticket,
 )
+from apps.booking.serializers import TicketSerializer
 from apps.booking.services import (
     NoAvailability,
     acquire_hold,
@@ -263,6 +264,46 @@ class TicketOnPaymentTestCase(BookingFixture):
         self.assertEqual(holds[0].state, SeatHold.State.CONVERTED)
         # Ledger posted in the same transaction as the ticket.
         self.assertGreaterEqual(attempt.__class__.objects.count(), 1)
+
+    def test_ticket_document_carries_route_vehicle_and_payment(self):
+        from apps.payments.services import record_cash_collection
+
+        order, _ = self._paid_booking()
+        record_cash_collection(order=order, actor=self.admin, note="counter")
+        ticket = Ticket.objects.get(hold__order=order)
+
+        document = TicketSerializer(ticket).data["document"]
+
+        self.assertEqual(document["operator"]["name"], "Alpha Sacco")
+        self.assertEqual(document["order_id"], str(order.pk))
+        self.assertEqual(document["trip"]["from_place"], "Nairobi")
+        self.assertEqual(document["trip"]["to_place"], "Eldoret")
+        self.assertEqual(document["trip"]["vehicle_registration"], "KDA100A")
+        self.assertEqual(document["trip"]["route"], "Nairobi-Eldoret")
+        self.assertEqual(document["payment"]["provider"], "cash")
+        self.assertEqual(document["payment"]["amount_minor"], order.total_minor)
+        self.assertTrue(document["payment"]["reference"].startswith("CASH-"))
+
+    def test_ticket_endpoint_filters_by_order_and_returns_document(self):
+        from rest_framework.test import APIClient
+
+        from apps.payments.services import record_cash_collection
+
+        order, _ = self._paid_booking()
+        record_cash_collection(order=order, actor=self.admin, note="counter")
+
+        client = APIClient()
+        client.force_authenticate(self.admin)
+        response = client.get("/api/v1/tickets/", {"order": str(order.pk)})
+
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()["results"]
+        self.assertEqual(len(rows), 1)
+        document = rows[0]["document"]
+        self.assertEqual(document["trip"]["from_place"], "Nairobi")
+        self.assertEqual(document["trip"]["to_place"], "Eldoret")
+        self.assertEqual(document["trip"]["vehicle_registration"], "KDA100A")
+        self.assertEqual(document["payment"]["provider"], "cash")
 
     def test_expired_hold_yields_no_ticket_but_refund_event(self):
         from apps.common.models import OutboxEvent

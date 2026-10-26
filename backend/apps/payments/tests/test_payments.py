@@ -2,6 +2,7 @@
 idempotency key and repeated/or stale callbacks must not create a second
 business effect."""
 
+import uuid
 from unittest import mock
 
 from django.db import DatabaseError, IntegrityError, transaction
@@ -16,6 +17,7 @@ from apps.payments.services import (
     PaymentError,
     create_payment_attempt,
     handle_payment_callback,
+    record_cash_collection,
 )
 
 
@@ -365,3 +367,90 @@ class AuditIsTransactionalTestCase(PaidOrderFixture):
         self.assertFalse(
             LedgerEntry.objects.filter(payment_attempt=attempt).exists()
         )
+
+
+class CashCollectionTestCase(PaidOrderFixture):
+    """Cash is collected once, against the exact order, and issues the ticket."""
+
+    def test_cash_confirms_the_order_and_posts_a_balanced_pair(self):
+        attempt, created = record_cash_collection(
+            order=self.order, actor=self.user
+        )
+        self.assertTrue(created)
+        self.assertEqual(attempt.provider, "cash")
+        self.assertEqual(attempt.state, PaymentAttempt.State.SUCCESS)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CONFIRMED)
+        entries = LedgerEntry.objects.filter(payment_attempt=attempt)
+        self.assertEqual(entries.count(), 2)
+        self.assertEqual(
+            {entry.entry_type for entry in entries}, {"debit", "credit"}
+        )
+
+    def test_repeating_the_key_returns_the_same_collection(self):
+        key = uuid.uuid4()
+        first, created = record_cash_collection(
+            order=self.order, actor=self.user, idempotency_key=key
+        )
+        second, created_again = record_cash_collection(
+            order=self.order, actor=self.user, idempotency_key=key
+        )
+        self.assertTrue(created)
+        self.assertFalse(created_again)
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(PaymentAttempt.objects.filter(order=self.order).count(), 1)
+
+    def test_cash_cannot_be_collected_twice(self):
+        record_cash_collection(order=self.order, actor=self.user)
+        with self.assertRaises(PaymentError):
+            record_cash_collection(order=self.order, actor=self.user)
+
+    def test_a_mismatched_amount_is_refused(self):
+        with self.assertRaises(PaymentError):
+            record_cash_collection(
+                order=self.order, actor=self.user, amount_minor=29_999
+            )
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.CREATED)
+
+
+class CashCollectionAPITestCase(PaidOrderFixture):
+    """Counter staff can take cash; somebody outside the organization cannot."""
+
+    def setUp(self):
+        super().setUp()
+        self.counter = User.objects.create_user("0722000099", "pass-C-1234")
+        Membership.objects.create(
+            user=self.counter, organization=self.org, role=Role.BRANCH_STAFF
+        )
+        from rest_framework.test import APIClient
+
+        self.client = APIClient()
+        self.client.force_authenticate(self.counter)
+
+    def test_counter_staff_records_cash_and_the_order_confirms(self):
+        response = self.client.post(
+            "/api/v1/payments/cash/",
+            {
+                "order": str(self.order.pk),
+                "amount_minor": self.order.total_minor,
+                "currency": self.order.currency,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["state"], PaymentAttempt.State.SUCCESS)
+        self.assertEqual(response.data["order_status"], Order.Status.CONFIRMED)
+
+    def test_an_outsider_cannot_record_cash(self):
+        outsider = User.objects.create_user("0722000088", "pass-O-1234")
+        self.client.force_authenticate(outsider)
+        response = self.client.post(
+            "/api/v1/payments/cash/",
+            {
+                "order": str(self.order.pk),
+                "amount_minor": self.order.total_minor,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)

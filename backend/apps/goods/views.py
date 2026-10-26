@@ -44,6 +44,10 @@ from apps.goods.insertion import (
     request_insertion,
     route_state,
 )
+from apps.goods.parcels import (
+    book_parcel_order,
+    quote_parcel_order,
+)
 from apps.goods.models import (
     ConsolidationPlan,
     CustodyEvent,
@@ -87,6 +91,12 @@ FREIGHT_OPS_ROLES = (
     Role.OPERATOR_ADMIN,
     Role.PLATFORM_ADMIN,
 )
+# Counter staff sell tickets and intake parcels at a branch. They are not
+# freight operations: manifests, trips and custody stay with dispatchers.
+COUNTER_SALES_ROLES = (
+    Role.BRANCH_STAFF,
+    Role.BRANCH_MANAGER,
+)
 
 
 def _err(exc):
@@ -113,6 +123,18 @@ class _OrgScopedViewSet(viewsets.GenericViewSet):
     def _require_ops(self):
         if not self._is_ops(self.request.user):
             raise PermissionDenied("Freight operations privileges required.")
+
+    def _is_counter(self, user):
+        if not (user and user.is_authenticated):
+            return False
+        return user.memberships.filter(
+            is_active=True, role__in=COUNTER_SALES_ROLES
+        ).exists()
+
+    def _require_sales(self):
+        if self._is_ops(self.request.user) or self._is_counter(self.request.user):
+            return
+        raise PermissionDenied("Counter or freight operations privileges required.")
 
 
 def _is_assigned_driver(trip, user):
@@ -147,12 +169,18 @@ class ShipmentViewSet(
         A courier quote books a courier order, priced and addressed parcel by
         parcel; the caller says nothing else.
         """
-        self._require_ops()
         quote = Quote.objects.filter(pk=request.data.get("quote")).first()
         if quote is None:
             return Response({"detail": "A quote is required."}, status=400)
-        if quote.request_payload.get("kind") == "courier_order":
+        kind = quote.request_payload.get("kind")
+        if kind in {"courier_order", "parcel_order"}:
+            self._require_sales()
+        else:
+            self._require_ops()
+        if kind == "courier_order":
             return self._book_courier(request, quote)
+        if kind == "parcel_order":
+            return self._book_parcel(request, quote)
         if quote.status == Quote.Status.VALID:
             try:
                 quote.accept()
@@ -217,6 +245,76 @@ class ShipmentViewSet(
             new_value={"reference": order.reference, "parcels": order.package_count},
         )
         return Response(ShipmentSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    def _book_parcel(self, request, quote):
+        """Book an intercity parcel order from its accepted quote."""
+        organization = _organization_for(request, quote.organization_id)
+        if quote.status == Quote.Status.VALID:
+            try:
+                quote.accept()
+            except ValueError as exc:
+                return _err(GoodsError(str(exc)))
+        try:
+            order = book_parcel_order(
+                quote=quote,
+                organization=organization,
+                sender=request.user if request.data.get("sender") else None,
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        record_audit(
+            actor=request.user,
+            organization=organization,
+            action="goods.parcel_order_booked",
+            entity_type="shipment",
+            entity_id=order.pk,
+            new_value={"reference": order.reference, "parcels": order.package_count},
+        )
+        return Response(ShipmentSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["post"], url_path="parcel-quote")
+    def parcel_quote(self, request):
+        """Price an intercity parcel and freeze its hub chain.
+
+        Counter staff quote walk-in parcels here; the booking then takes
+        everything from the quote so a counter cannot re-price a parcel after
+        the sender has agreed to the total.
+        """
+        self._require_sales()
+        service = Service.objects.filter(pk=request.data.get("service")).first()
+        organization = _organization_for(request, None)
+        collection = place_or_none(request.data.get("collection"))
+        destination = place_or_none(request.data.get("destination"))
+        try:
+            quote = quote_parcel_order(
+                organization=organization,
+                service=service,
+                collection=collection,
+                destination=destination,
+                packages=request.data.get("parcels")
+                or request.data.get("packages")
+                or [],
+                hubs=request.data.get("hubs") or [],
+                service_window_start=request.data.get("service_window_start"),
+                service_window_end=request.data.get("service_window_end"),
+                sender_name=request.data.get("sender_name", ""),
+                sender_phone=request.data.get("sender_phone", ""),
+                handling_needs=request.data.get("handling_needs") or [],
+            )
+        except GoodsError as exc:
+            return _err(exc)
+        return Response(
+            {
+                "quote": quote.pk,
+                "total_minor": quote.total_minor,
+                "currency": quote.currency,
+                "basis": quote.basis,
+                "rate_card": quote.rate_card_name,
+                "parcels": quote.request_payload.get("parcels", []),
+                "expires_at": quote.expires_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=["post"], url_path="courier-quote")
     def courier_quote(self, request):

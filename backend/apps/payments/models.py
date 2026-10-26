@@ -31,6 +31,14 @@ class PaymentAttempt(BaseModel):
         on_delete=models.PROTECT,
         related_name="payment_attempts",
     )
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="payment_attempts",
+        help_text="Branch that collected the money.",
+    )
     provider = models.CharField(max_length=32, default="mpesa")
     idempotency_key = models.UUIDField(default=uuid.uuid4)
     expected_amount_minor = models.PositiveBigIntegerField()

@@ -8,6 +8,7 @@ from apps.booking.views import (
     HoldView,
     RouteViewSet,
     SearchView,
+    SeatMapView,
     TicketViewSet,
 )
 
@@ -21,5 +22,6 @@ urlpatterns = [
     path("booking/search/", SearchView.as_view(), name="booking-search"),
     path("booking/holds/", HoldView.as_view(), name="booking-holds"),
     path("booking/checkout/", CheckoutView.as_view(), name="booking-checkout"),
+    path("booking/seats/", SeatMapView.as_view(), name="booking-seats"),
     path("booking/board/", BoardView.as_view(), name="booking-board"),
 ]

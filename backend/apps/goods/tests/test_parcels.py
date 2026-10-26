@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.accounts.models import Membership, Organization, Role, User
 from apps.catalog.models import Place, RateCard, RateLine, Service
@@ -712,3 +713,66 @@ class CustodyIsAppendOnlyTestCase(ParcelFixture):
                 corrects=original,
             )
         self.assertIn("reason", str(caught.exception))
+
+
+class ParcelCounterAPITestCase(ParcelFixture):
+    """Branch counter staff can quote and book a walk-in parcel.
+
+    Ticket sales already need only authentication; parcel intake previously
+    needed freight operations, which counter staff do not hold. The counter
+    path is deliberately narrower than freight: it can quote and book, but the
+    hub, manifest and custody routes stay with dispatchers.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.counter = User.objects.create_user("0755000044", "pass-C-1234")
+        Membership.objects.create(
+            user=self.counter,
+            organization=self.org,
+            role=Role.BRANCH_STAFF,
+            workplace=self.kisumu,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.counter)
+
+    def _quote_body(self):
+        return {
+            "service": str(self.parcel_service.pk),
+            "collection": str(self.kisumu.pk),
+            "destination": str(self.nyeri.pk),
+            "hubs": [str(self.nairobi.pk)],
+            "sender_name": "Grace Wanjiku",
+            "sender_phone": "0722000099",
+            "service_window_start": self.start.isoformat(),
+            "service_window_end": self.end.isoformat(),
+            "parcels": [self._parcel()],
+        }
+
+    def test_counter_can_quote_a_walk_in_parcel(self):
+        response = self.client.post(
+            "/api/v1/shipments/parcel-quote/", self._quote_body(), format="json"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["total_minor"], 900)
+        self.assertEqual(response.data["currency"], "KES")
+        self.assertEqual(len(response.data["parcels"]), 1)
+
+    def test_counter_can_book_the_quoted_parcel(self):
+        quote = self.client.post(
+            "/api/v1/shipments/parcel-quote/", self._quote_body(), format="json"
+        ).data
+        response = self.client.post(
+            "/api/v1/shipments/", {"quote": str(quote["quote"]), "sender": True}, format="json"
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        order = Shipment.objects.get(pk=response.data["id"])
+        self.assertEqual(order.package_count, 1)
+        self.assertEqual(order.status, Shipment.Status.BOOKED)
+
+    def test_a_non_member_cannot_quote(self):
+        self.client.force_authenticate(self.bystander)
+        response = self.client.post(
+            "/api/v1/shipments/parcel-quote/", self._quote_body(), format="json"
+        )
+        self.assertEqual(response.status_code, 403)

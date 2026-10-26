@@ -112,3 +112,116 @@ class IsolationTestCase(APITestCase):
             HTTP_AUTHORIZATION=self.token_b,
         )
         self.assertEqual(response.status_code, 404)
+
+class OrganizationCreationVisibilityTestCase(APITestCase):
+    """A platform admin who creates an organization must be able to see it
+    immediately, even before a membership row exists for them."""
+
+    def _token_for(self, user):
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        return f"Bearer {RefreshToken.for_user(user).access_token}"
+
+    def test_superuser_sees_newly_created_organization(self):
+        admin = User.objects.create_superuser("0711000101", "admin-pass-1234")
+        auth = self._token_for(admin)
+
+        created = self.client.post(
+            "/api/v1/organizations/",
+            {"name": "New Carrier", "slug": "new-carrier"},
+            format="json",
+            HTTP_AUTHORIZATION=auth,
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+
+        listed = self.client.get("/api/v1/organizations/", HTTP_AUTHORIZATION=auth)
+        self.assertEqual(listed.status_code, 200, listed.content)
+        payload = listed.json()
+        rows = payload["results"] if isinstance(payload, dict) else payload
+        self.assertIn(created.json()["id"], {row["id"] for row in rows})
+
+    def test_platform_admin_sees_newly_created_organization(self):
+        home = Organization.objects.create(name="Platform Home", slug="platform-home")
+        admin = User.objects.create_user("0711000102", "admin-pass-1234")
+        Membership.objects.create(
+            user=admin, organization=home, role=Role.PLATFORM_ADMIN
+        )
+        auth = self._token_for(admin)
+
+        created = self.client.post(
+            "/api/v1/organizations/",
+            {"name": "Partner Carrier", "slug": "partner-carrier"},
+            format="json",
+            HTTP_AUTHORIZATION=auth,
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+
+        listed = self.client.get("/api/v1/organizations/", HTTP_AUTHORIZATION=auth)
+        self.assertEqual(listed.status_code, 200, listed.content)
+        payload = listed.json()
+        rows = payload["results"] if isinstance(payload, dict) else payload
+        self.assertIn(created.json()["id"], {row["id"] for row in rows})
+
+
+class OrganizationOnboardingTestCase(APITestCase):
+    """Platform administrators drive onboarding: approve an organization and
+    hire its first operator admin, even though they hold no membership there."""
+
+    def setUp(self):
+        self.home = Organization.objects.create(name="Platform", slug="platform-home-2")
+        self.admin = User.objects.create_user("0711000201", "admin-pass-1234")
+        Membership.objects.create(
+            user=self.admin, organization=self.home, role=Role.PLATFORM_ADMIN
+        )
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        self.auth = f"Bearer {RefreshToken.for_user(self.admin).access_token}"
+
+        self.org = Organization.objects.create(
+            name="Onboarded Carrier", slug="onboarded-carrier"
+        )
+
+    def test_platform_admin_approves_organization(self):
+        response = self.client.post(
+            f"/api/v1/organizations/{self.org.pk}/approve/",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["approval_status"], "approved")
+
+    def test_operator_admin_cannot_approve_organization(self):
+        operator = User.objects.create_user("0711000202", "operator-pass-1234")
+        Membership.objects.create(
+            user=operator, organization=self.org, role=Role.OPERATOR_ADMIN
+        )
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        auth = f"Bearer {RefreshToken.for_user(operator).access_token}"
+        response = self.client.post(
+            f"/api/v1/organizations/{self.org.pk}/approve/", HTTP_AUTHORIZATION=auth
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_platform_admin_hires_operator_admin_into_new_org(self):
+        response = self.client.post(
+            "/api/v1/staff/",
+            {
+                "organization": str(self.org.pk),
+                "phone": "0711000203",
+                "full_name": "New Ops Lead",
+                "password": "lead-pass-1234",
+                "role": "operator_admin",
+            },
+            format="json",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["role"], "operator_admin")
+        self.assertEqual(response.json()["organization"], str(self.org.pk))
+
+    def test_platform_admin_lists_staff_of_new_org(self):
+        response = self.client.get(
+            f"/api/v1/staff/?organization={self.org.pk}",
+            HTTP_AUTHORIZATION=self.auth,
+        )
+        self.assertEqual(response.status_code, 200, response.content)

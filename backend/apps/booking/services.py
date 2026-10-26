@@ -205,6 +205,7 @@ def create_booking_order(
     passenger_phone,
     passenger_id_number="",
     customer=None,
+    selling_branch=None,
 ):
     """Turn held seats into a pay-ready Order for a departure.
 
@@ -248,6 +249,7 @@ def create_booking_order(
 
     order = Order.objects.create(
         organization=departure.organization,
+        branch=selling_branch or departure.branch,
         customer=customer,
         service=departure.service,
         quote=quote,
@@ -293,6 +295,7 @@ def issue_ticket_for_order(order):
         passenger = detail.get("passenger", {})
         ticket = Ticket.objects.create(
             departure=hold.departure,
+            selling_branch=order.branch or hold.departure.branch,
             hold=hold,
             reference=reference,
             token=token,

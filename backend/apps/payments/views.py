@@ -1,15 +1,25 @@
 from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import organization_ids_for
+from apps.accounts.models import Role, organization_ids_for
 from apps.orders.models import Order
 from apps.payments.models import LedgerEntry, PaymentAttempt
 from apps.payments.services import (
     PaymentError,
     create_payment_attempt,
     handle_payment_callback,
+    record_cash_collection,
+)
+
+CASH_COLLECTION_ROLES = (
+    Role.BRANCH_STAFF,
+    Role.BRANCH_MANAGER,
+    Role.DISPATCHER,
+    Role.OPERATOR_ADMIN,
+    Role.PLATFORM_ADMIN,
 )
 
 
@@ -44,6 +54,14 @@ class PaymentAttemptCreateSerializer(serializers.Serializer):
     provider = serializers.CharField(default="mpesa")
 
 
+class CashCollectionSerializer(serializers.Serializer):
+    order = serializers.UUIDField()
+    amount_minor = serializers.IntegerField(min_value=1)
+    currency = serializers.CharField(max_length=3, default="KES")
+    idempotency_key = serializers.UUIDField(required=False)
+    note = serializers.CharField(required=False, allow_blank=True, max_length=255)
+
+
 class PaymentAttemptViewSet(viewsets.GenericViewSet):
     queryset = PaymentAttempt.objects.all()
     permission_classes = [IsAuthenticated]
@@ -70,6 +88,16 @@ class PaymentAttemptViewSet(viewsets.GenericViewSet):
         if attempt is None:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
         return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
+
+    @staticmethod
+    def _can_collect(user, order):
+        if user.is_superuser:
+            return True
+        return user.memberships.filter(
+            is_active=True,
+            organization_id=order.organization_id,
+            role__in=CASH_COLLECTION_ROLES,
+        ).exists()
 
     def create(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -105,6 +133,45 @@ class PaymentAttemptViewSet(viewsets.GenericViewSet):
         return Response(
             PaymentAttemptSerializer(attempt, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
+        )
+
+
+    @action(detail=False, methods=["post"], url_path="cash")
+    def cash(self, request):
+        """Record cash handed over at a counter and issue the ticket.
+
+        This stays inside the same transaction as the ledger postings and the
+        ticket conversion, so cash is either fully recorded or not recorded.
+        """
+        serializer = CashCollectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        order = Order.objects.filter(pk=data["order"]).first()
+        if order is None:
+            return Response({"detail": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not self._can_collect(request.user, order):
+            return Response(
+                {"detail": "Counter or operations privileges required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            attempt, created = record_cash_collection(
+                order=order,
+                actor=request.user,
+                amount_minor=data["amount_minor"],
+                currency=data.get("currency", "KES"),
+                idempotency_key=data.get("idempotency_key"),
+                note=data.get("note", ""),
+            )
+        except PaymentError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                **PaymentAttemptSerializer(attempt, context={"request": request}).data,
+                "created": created,
+                "order_status": order.status,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
 

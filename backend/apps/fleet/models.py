@@ -24,6 +24,14 @@ class Vehicle(BaseModel):
     organization = models.ForeignKey(
         "accounts.Organization", on_delete=models.CASCADE, related_name="vehicles"
     )
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="vehicles",
+        help_text="Owning branch. Null means an HQ or shared pool.",
+    )
     registration_number = models.CharField(max_length=20, unique=True)
     vehicle_class = models.CharField(max_length=12, choices=VehicleClass.choices)
     make = models.CharField(max_length=60, blank=True)
@@ -120,6 +128,14 @@ class Driver(BaseModel):
     )
     organization = models.ForeignKey(
         "accounts.Organization", on_delete=models.CASCADE, related_name="drivers"
+    )
+    branch = models.ForeignKey(
+        "accounts.Branch",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="drivers",
+        help_text="Branch the driver reports to. Null means an HQ or shared pool.",
     )
     license_number = models.CharField(max_length=40, blank=True)
     license_expires_on = models.DateField(null=True, blank=True)

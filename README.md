@@ -1,4 +1,4 @@
-#  Transport and Logistics Platform
+# Transport and Logistics Platform
 
 A unified transport marketplace and operations platform for Kenya covering passenger transport (scheduled buses and shuttles, on-demand rides, corporate and charter) and goods transport (courier, intercity parcels, freight, warehousing, returns and claims) on one shared business foundation: identity, fleet, pricing, payments, tracking and finance.
 
@@ -8,13 +8,13 @@ The complete product and technical architecture is defined in [`Kenya_Transport_
 
 Phase 1 (shared foundation), all of Phase 2 (scheduled booking, on-demand rides, corporate shuttles and charter/hire) and goods Envelopes 3A, 3B, 3C, 3D and 4A (booking and custody, consolidated shared load with the coverage floor and backhaul, mid-route insertion, local courier, then intercity parcels routed through hubs) are implemented and green:
 
-| Component | State |
-|---|---|
-| `backend/` | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger). |
-| `frontend/` | React + TypeScript + Vite back-office console: login behind an authenticated-redirect gate, a global error boundary, the dispatch shell, an auth context with token refresh, and an API client that clears tokens only on a definitive 401. Customer, driver and parent apps are not started. |
-| `infra/` | Empty. |
-| Tests | 518 passing: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, frozen prices under insertion, the nineteen courier invariants (per-parcel weight-band pricing, account rate-card resolution, per-parcel delivery proof, partial delivery, returns after a failed attempt, the mid-route insertion gate, and driver handovers), row-locked fleet reservation so two dispatchers cannot double-book a vehicle or driver, per-compartment volume as well as weight, the payment provider seam (a real Safaricom Daraja adapter with OAuth and STK push that falls back to a credential-free stub, plus amount and state validation on the callback), the append-only double-entry ledger, revenue recognition when the transport obligation is fulfilled, refunds that reverse through the ledger and can never be driven negative, and the fourteen intercity-parcel invariants (PARCEL services refused by courier, a hub booked as a leg, origin-scan custody, departure and arrival custody, missing and unmanifested arrivals as exceptions, hub holds that block onward movement and release, the hub hold query, and append-only corrections). |
-| Blueprint | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3D and 4A of §9–10 are delivered. Remaining: warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6. |
+| Component     | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/`  | Django + DRF API running on `/api/v1/`. 12 apps: `common` (outbox), `accounts` (identity/orgs/permissions), `audit`, `fleet` (vehicles/drivers/documents/cargo compartments), `catalog` (services/places/rate cards/quotes), `orders`, `booking` (routes/departures/segment seats/holds/tickets/boarding), `rides` (ride requests/dispatch/offers/trips/incidents), `corporate` (policies/cost centres/employees/travel requests/shuttles), `charter` (hire requests/vehicle+driver reservations/deposits/extras), `goods` (shipments/packages/legs/trips/manifests/custody/evidence/exceptions/returns), `payments` (M-PESA adapter, ledger).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frontend/` | React + TypeScript + Vite operator back-office console: authenticated shell, counter ticket sales with a branch selector and vehicle seat map, sale documents, dispatch board, staff, fleet, routes, organisations and branch administration. Customer, driver and parent apps are not started.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `infra/`    | Empty.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Tests         | 560 passing, 2 skipped: operator isolation, payment idempotency/callback dedup, outbox atomicity, segment seat inventory, atomic holds, ticket-on-payment, boarding, driver eligibility, first-accept-wins assignment, trip PIN, destination change, failed matching, contact privacy, corporate eligibility/approval/budget/shuttles/roster/departure, charter quoting/interval reservation/travel+turnaround availability/deposits/permitted extras, freight quote basis/terms snapshot, cargo capacity independent of seats, per-compartment limits, manifest reconciliation and release gating, append-only custody with corrections, delivery evidence verification, exceptions with next actions, linked returns, shared-load consolidation with explained rejections, plan validation/versioning/publication, the coverage-floor departure gate, backhaul opportunities, the empty-running measure, mid-route insertion preserving completed stops, delay tolerance refusals, driver-offer version checks, manifest amendment as a new version, contiguous stop numbering across insertions, frozen prices under insertion, the nineteen courier invariants (per-parcel weight-band pricing, account rate-card resolution, per-parcel delivery proof, partial delivery, returns after a failed attempt, the mid-route insertion gate, and driver handovers), row-locked fleet reservation so two dispatchers cannot double-book a vehicle or driver, per-compartment volume as well as weight, the payment provider seam (a real Safaricom Daraja adapter with OAuth and STK push that falls back to a credential-free stub, plus amount and state validation on the callback), the append-only double-entry ledger, revenue recognition when the transport obligation is fulfilled, refunds that reverse through the ledger and can never be driven negative, and the fourteen intercity-parcel invariants (PARCEL services refused by courier, a hub booked as a leg, origin-scan custody, departure and arrival custody, missing and unmanifested arrivals as exceptions, hub holds that block onward movement and release, the hub hold query, and append-only corrections), plus branch CRUD and head-office rules, cross-branch ticket visibility, branch-scoped fleet and staff, and cash collection. |
+| Blueprint     | Full architecture in the PDF. Phase 1, Phase 2 (§7–8) and Envelopes 3A–3D and 4A of §9–10 are delivered. Remaining: warehouse inventory, returns/claims depth, telemetry ingestion, and the operational and financial controls of roadmap steps 5–6.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## Repository layout
 
@@ -28,7 +28,7 @@ Transport/
 │   ├── requirements/     (base, development, production)
 │   └── tools/            (courier_smoke.py — real-HTTP end-to-end check; mpesa_stk_push.py — live Daraja Stage A; unused_imports.py)
 ├── frontend/                                        # Client applications
-│   └── src/  (api, context, components, pages/auth, pages/dispatch)
+│   └── src/  (api, context, components, pages, styles)
 └── infra/                                           # Infrastructure definitions (planned)
 ```
 
@@ -80,15 +80,15 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Phase 1 API surface
 
-| Area | Endpoints |
-|---|---|
-| Auth | `POST /api/v1/auth/register/`, `POST /api/v1/auth/token/`, `GET /api/v1/me/` |
-| Organizations | `/api/v1/organizations/`, `/api/v1/memberships/` |
-| Fleet | `/api/v1/vehicles/`, `/api/v1/drivers/`, `/api/v1/documents/` |
-| Catalog | `/api/v1/services/`, `/api/v1/places/`, `/api/v1/rate-cards/`, `/api/v1/quotes/` (with `/quotes/{id}/accept/`) |
-| Orders | `/api/v1/orders/` (with `/orders/{id}/confirm/`) |
-| Payments | `/api/v1/payments/`, `/api/v1/ledger/entries/`, `POST /api/v1/webhooks/mpesa/` |
-| Audit | `/api/v1/audit/events/` |
+| Area          | Endpoints                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Auth          | `POST /api/v1/auth/register/`, `POST /api/v1/auth/token/`, `GET /api/v1/me/`                                       |
+| Organizations | `/api/v1/organizations/`, `/api/v1/memberships/`                                                                     |
+| Fleet         | `/api/v1/vehicles/`, `/api/v1/drivers/`, `/api/v1/documents/`                                                      |
+| Catalog       | `/api/v1/services/`, `/api/v1/places/`, `/api/v1/rate-cards/`, `/api/v1/quotes/` (with `/quotes/{id}/accept/`) |
+| Orders        | `/api/v1/orders/` (with `/orders/{id}/confirm/`)                                                                     |
+| Payments      | `/api/v1/payments/`, `POST /api/v1/payments/cash/`, `/api/v1/ledger/entries/`, `POST /api/v1/webhooks/mpesa/` |
+| Audit         | `/api/v1/audit/events/`                                                                                                |
 
 ### Phase 1 invariants enforced
 
@@ -101,14 +101,14 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Phase 2 API surface (scheduled passenger booking)
 
-| Area | Endpoints |
-|---|---|
-| Search | `GET /api/v1/booking/search/?from=&to=&date=` – available departures + per-leg seats |
-| Hold | `POST /api/v1/booking/holds/` – atomic timed seat hold (one or many) |
-| Checkout | `POST /api/v1/booking/checkout/` – held seats → pay-ready order |
-| Boarding | `POST /api/v1/booking/board/` – scan ticket, mark boarded |
-| Routes | `/api/v1/routes/`, `/api/v1/departures/` (with `/departures/{id}/substitute_vehicle/`) |
-| Tickets | `/api/v1/tickets/` |
+| Area     | Endpoints                                                                                    |
+| -------- | -------------------------------------------------------------------------------------------- |
+| Search   | `GET /api/v1/booking/search/?from=&to=&date=` – available departures + per-leg seats      |
+| Hold     | `POST /api/v1/booking/holds/` – atomic timed seat hold (one or many)                      |
+| Checkout | `POST /api/v1/booking/checkout/` – held seats → pay-ready order                          |
+| Boarding | `POST /api/v1/booking/board/` – scan ticket, mark boarded                                 |
+| Routes   | `/api/v1/routes/`, `/api/v1/departures/` (with `/departures/{id}/substitute_vehicle/`) |
+| Tickets  | `/api/v1/tickets/`                                                                         |
 
 ### Phase 2 invariants enforced
 
@@ -120,14 +120,56 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 - **Vehicle substitution with fewer seats** creates a reassignment exception requiring customer communication — never a silent removal.
 - **Operator isolation** on route/departure writes.
 
+### Back-office, branches and counter sales
+
+The React console at `frontend/` is the staff-facing back office. It is not a
+customer app: counter staff sell seats and intake parcels, dispatchers track
+runs, managers administer staff and fleet, and administrators configure
+organisations and branches.
+
+| Area      | Endpoints                                                                                                   |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| Branches  | `/api/v1/branches/` – organisation-scoped list/retrieve; administrators create and edit, including head office |
+| Staff     | `/api/v1/staff/` – hire, update and offboard branch-scoped staff                                            |
+| Ticket    | `/api/v1/booking/search/`, `/holds/`, `/checkout/`, `/tickets/` with `selling_branch`                       |
+| Cash      | `POST /api/v1/payments/cash/` – record a counter cash collection and issue the ticket                        |
+| Dispatch  | `/api/v1/departures/` – branch-filtered departures, vehicle and driver readiness used by the board              |
+
+Rules that are enforced:
+
+- **A branch is an operating unit, not a map stop.** Scheduled buses, ticket
+  sales, staff, vehicles and drivers belong to an `accounts.Branch`; stages,
+  hubs and landmarks remain `catalog.Place` rows. Company setup no longer
+  creates operating branches.
+- **One head office per active organisation.** An organisation with one active
+  branch may leave it as the head office; once it has more than one, one branch
+  must be head office, and promoting a branch demotes the previous one.
+- **Membership uniqueness respects scope.** A person can hold a head-office
+  membership plus branch-scoped memberships, but cannot hold the same role
+  twice at the same branch.
+- **Selling branch and operating branch are separate.** A ticket may be sold by
+  one branch for a departure operated by another; the sale, ticket documents
+  and cash attempt record the selling branch while seat inventory stays with
+  the departure.
+- **Visibility follows the role, not just the organisation.** Branch staff see
+  their branch's sales plus their own customer tickets; the operations view
+  filters by operating branch. Operators with mixed roles do not inherit
+  network-wide access in an organisation where they are only branch staff.
+- **Fleet reads are branch-scoped.** Branch managers see their branch's
+  vehicles plus shared vehicles; they cannot see or manage another branch's
+  fleet.
+- **The counter seat map is the only vehicle visual.** It is a 2D seat selector
+  at Counter → Issue ticket once a departure and boarding/alighting stops are
+  chosen. There is no 3D bus simulator in the current build.
+
 ### Envelope 2A API surface (on-demand rides and dispatch)
 
-| Area | Endpoints |
-|---|---|
-| Rides | `/api/v1/rides/` (`POST` request a ride, `/{id}/send-offers/` dispatch, `/{id}/fail/` failed matching) |
-| Offers | `/api/v1/offers/` (driver-scoped, with `/{id}/accept/` and `/{id}/decline/`) |
-| Trips | `/api/v1/trips/{id}/` with `arrive/`, `verify_pin/`, `complete/`, `change_destination/`, `accept_destination/`, `incident/` |
-| Shifts / zones | `/api/v1/driver/shifts/`, `/api/v1/service-zones/` |
+| Area           | Endpoints                                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Rides          | `/api/v1/rides/` (`POST` request a ride, `/{id}/send-offers/` dispatch, `/{id}/fail/` failed matching)                            |
+| Offers         | `/api/v1/offers/` (driver-scoped, with `/{id}/accept/` and `/{id}/decline/`)                                                        |
+| Trips          | `/api/v1/trips/{id}/` with `arrive/`, `verify_pin/`, `complete/`, `change_destination/`, `accept_destination/`, `incident/` |
+| Shifts / zones | `/api/v1/driver/shifts/`, `/api/v1/service-zones/`                                                                                    |
 
 ### Envelope 2A invariants enforced
 
@@ -142,13 +184,13 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 2B API surface (corporate travel and shuttles)
 
-| Area | Endpoints |
-|---|---|
-| Policy | `/api/v1/corporate/policy/` — permitted services, approval threshold, budget period |
-| Cost centres | `/api/v1/corporate/cost-centers/` — budget, derived spend and remaining |
-| Employees | `/api/v1/corporate/members/` (+ `/{id}/deactivate/`) |
-| Travel requests | `/api/v1/corporate/requests/` (+ `/{id}/approve/`, `/{id}/reject/`) |
-| Shuttles | `/api/v1/corporate/shuttle-templates/` (+ `/{id}/generate/`), `/api/v1/corporate/shuttle-runs/{id}/roster/`, `/unroster/` |
+| Area            | Endpoints                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Policy          | `/api/v1/corporate/policy/` — permitted services, approval threshold, budget period                                            |
+| Cost centres    | `/api/v1/corporate/cost-centers/` — budget, derived spend and remaining                                                        |
+| Employees       | `/api/v1/corporate/members/` (+ `/{id}/deactivate/`)                                                                          |
+| Travel requests | `/api/v1/corporate/requests/` (+ `/{id}/approve/`, `/{id}/reject/`)                                                         |
+| Shuttles        | `/api/v1/corporate/shuttle-templates/` (+ `/{id}/generate/`), `/api/v1/corporate/shuttle-runs/{id}/roster/`, `/unroster/` |
 
 ### Envelope 2B invariants enforced
 
@@ -162,11 +204,11 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 2C API surface (charter and vehicle hire)
 
-| Area | Endpoints |
-|---|---|
+| Area          | Endpoints                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Hire requests | `/api/v1/charter/requests/` (+ `/{id}/quote/`, `/confirm/`, `/deposit/`, `/extras/`, `/complete/`, `/cancel/`) |
-| Availability | `GET /api/v1/charter/availability/?start_at=&end_at=&vehicle_class=` |
-| Reservations | `/api/v1/charter/reservations/` |
+| Availability  | `GET /api/v1/charter/availability/?start_at=&end_at=&vehicle_class=`                                                       |
+| Reservations  | `/api/v1/charter/reservations/`                                                                                            |
 
 ### Envelope 2C invariants enforced
 
@@ -180,13 +222,13 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 3A API surface (freight booking, manifest and custody)
 
-| Area | Endpoints |
-|---|---|
-| Shipments | `POST /api/v1/shipments/quote/`, `POST /api/v1/shipments/`, `/{id}/custody/`, `/{id}/packages/`, `/{id}/evidence/`, `/{id}/exceptions/`, `/{id}/return/` |
-| Packages | `/api/v1/packages/` with `POST /api/v1/packages/{id}/custody/` (append-only) |
-| Trips | `/api/v1/freight-trips/` — with the remaining cargo capacity and per-compartment allowance |
-| Manifests | `POST /api/v1/manifests/build/`, `/{id}/reconcile/`, `/{id}/release/` |
-| Exceptions | `/api/v1/shipment-exceptions/{id}/resolve/` |
+| Area       | Endpoints                                                                                                                                                              |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shipments  | `POST /api/v1/shipments/quote/`, `POST /api/v1/shipments/`, `/{id}/custody/`, `/{id}/packages/`, `/{id}/evidence/`, `/{id}/exceptions/`, `/{id}/return/` |
+| Packages   | `/api/v1/packages/` with `POST /api/v1/packages/{id}/custody/` (append-only)                                                                                       |
+| Trips      | `/api/v1/freight-trips/` — with the remaining cargo capacity and per-compartment allowance                                                                          |
+| Manifests  | `POST /api/v1/manifests/build/`, `/{id}/reconcile/`, `/{id}/release/`                                                                                            |
+| Exceptions | `/api/v1/shipment-exceptions/{id}/resolve/`                                                                                                                          |
 
 ### Envelope 3A invariants enforced
 
@@ -203,13 +245,13 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 3B API surface (consolidated shared load, coverage floor, backhaul)
 
-| Area | Endpoints |
-|---|---|
+| Area          | Endpoints                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
 | Consolidation | `POST /api/v1/freight-trips/{id}/consolidation/propose/`, `GET /api/v1/freight-trips/{id}/consolidation/` |
-| Plan versions | `POST /api/v1/consolidation-plans/{id}/validate/`, `/{id}/publish/`, `/{id}/supersede/` |
-| Departure | `GET /api/v1/freight-trips/{id}/coverage/`, `POST /api/v1/freight-trips/{id}/depart/` |
-| Backhaul | `GET /api/v1/backhaul/opportunities/` |
-| Empty running | `GET /api/v1/reports/empty-running/` |
+| Plan versions | `POST /api/v1/consolidation-plans/{id}/validate/`, `/{id}/publish/`, `/{id}/supersede/`                 |
+| Departure     | `GET /api/v1/freight-trips/{id}/coverage/`, `POST /api/v1/freight-trips/{id}/depart/`                     |
+| Backhaul      | `GET /api/v1/backhaul/opportunities/`                                                                       |
+| Empty running | `GET /api/v1/reports/empty-running/`                                                                        |
 
 ### Envelope 3B invariants enforced
 
@@ -225,13 +267,13 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 3C API surface (mid-route insertion, remaining-stop changes)
 
-| Area | Endpoints |
-|---|---|
-| Route state | `GET /api/v1/freight-trips/{id}/route/` — current published version, completed and remaining stops, coverage |
-| Dispatcher insertion | `POST /api/v1/freight-trips/{id}/insertion/` |
-| Driver offers | `GET/POST /api/v1/insertion-requests/`, `POST /api/v1/freight-trips/{id}/insertion-requests/`, `POST /api/v1/insertion-requests/{id}/accept/`, `/{id}/decline/` |
-| Stop progress | `POST /api/v1/consolidation-plans/{id}/stops/{stop_id}/complete/` |
-| Manifest amendment | `POST /api/v1/manifests/{id}/amend/` — new manifest version for the mid-route pickup |
+| Area                 | Endpoints                                                                                                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Route state          | `GET /api/v1/freight-trips/{id}/route/` — current published version, completed and remaining stops, coverage                                                         |
+| Dispatcher insertion | `POST /api/v1/freight-trips/{id}/insertion/`                                                                                                                          |
+| Driver offers        | `GET/POST /api/v1/insertion-requests/`, `POST /api/v1/freight-trips/{id}/insertion-requests/`, `POST /api/v1/insertion-requests/{id}/accept/`, `/{id}/decline/` |
+| Stop progress        | `POST /api/v1/consolidation-plans/{id}/stops/{stop_id}/complete/`                                                                                                     |
+| Manifest amendment   | `POST /api/v1/manifests/{id}/amend/` — new manifest version for the mid-route pickup                                                                                 |
 
 ### Envelope 3C invariants enforced
 
@@ -246,15 +288,15 @@ Seeded login: superuser `+254700000001` / `admin-password-1`, operator `+2547000
 
 ### Envelope 3D API surface (local courier, one pickup and many recipients)
 
-| Area | Endpoints |
-|---|---|
-| Courier quoting | `POST /api/v1/shipments/courier-quote/` — per-parcel breakdown against the resolved rate card |
-| Courier booking | `POST /api/v1/shipments/` with a courier quote — one collection, N parcels |
-| Rate cards | `/api/v1/rate-cards/` — now load-bearing rather than descriptive |
-| Per-parcel delivery | `POST /api/v1/packages/{id}/deliver/` |
-| Failed attempt | `POST /api/v1/packages/{id}/failed-attempt/`, or `POST /api/v1/shipments/{id}/exceptions/` with a `package` |
-| Per-parcel evidence | `POST /api/v1/shipments/{id}/evidence/` with a `package` |
-| Returns | `POST /api/v1/shipments/{id}/return/` with the parcels to reverse |
+| Area                | Endpoints                                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Courier quoting     | `POST /api/v1/shipments/courier-quote/` — per-parcel breakdown against the resolved rate card                  |
+| Courier booking     | `POST /api/v1/shipments/` with a courier quote — one collection, N parcels                                     |
+| Rate cards          | `/api/v1/rate-cards/` — now load-bearing rather than descriptive                                               |
+| Per-parcel delivery | `POST /api/v1/packages/{id}/deliver/`                                                                           |
+| Failed attempt      | `POST /api/v1/packages/{id}/failed-attempt/`, or `POST /api/v1/shipments/{id}/exceptions/` with a `package` |
+| Per-parcel evidence | `POST /api/v1/shipments/{id}/evidence/` with a `package`                                                      |
+| Returns             | `POST /api/v1/shipments/{id}/return/` with the parcels to reverse                                               |
 
 ### Envelope 3D invariants enforced
 
@@ -343,6 +385,71 @@ python3 -m virtualenv .venv          # or: python3 -m venv .venv
 .venv/bin/python manage.py test --settings=config.settings.test
 .venv/bin/python tools/courier_smoke.py    # the courier loop over real HTTP
 ```
+
+Always keep `--settings=config.settings.test`: it pins the database to
+in-memory SQLite **and** removes live `MPESA_*` values loaded from `.env`. Running
+without it can select the real Daraja adapter and turn offline payment tests
+into a live subscriber request.
+
+### M-PESA STK push checks
+
+The Daraja adapter is tested offline by injecting a recording HTTP session; no
+money and no phone prompt are involved:
+
+```bash
+cd backend
+.venv/bin/python manage.py test \
+  apps.payments.tests.test_provider.RequestBuildingTestCase \
+  apps.payments.tests.test_provider.CredentialSelectionTestCase \
+  --settings=config.settings.test
+.venv/bin/python manage.py test apps.payments --settings=config.settings.test
+```
+
+The first command checks OAuth, STK payload fields, shilling conversion, phone
+normalisation and token reuse. The second runs the full payment, cash and ledger
+suite. A live Stage A push is available only when real sandbox credentials and a
+public HTTPS callback are configured:
+
+```bash
+cd backend
+.venv/bin/python tools/mpesa_stk_push.py --phone 07... --amount 1
+```
+
+This sends a real STK prompt to that phone and exits 0 when Daraja accepts it.
+Safaricom cannot call back to localhost, so the callback half needs a public
+HTTPS tunnel or deployment.
+
+## Getting started (web back-office)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173/` with the API running on
+`http://localhost:8000/`. The seeded operator account is
+`+254700000002` / `operator-password-1`; the platform administrator is
+`+254700000001` / `admin-password-1`.
+
+The staff console covers:
+
+- **Counter** – choose a selling branch, search scheduled departures, select a
+  2D vehicle seat map, sell a ticket, take cash or M-PESA, and print/issue the
+  ticket and receipt.
+- **Dispatch** – filter the day's departures by branch and route, and see
+  unassigned, assigned, and in-transit runs.
+- **Branches** – list/edit branches, set the head office, and see branch
+  staffing, fleet, routes and counter-sales counts.
+- **People** – hire and offboard branch staff and managers.
+- **Fleet** – administrators create vehicles; branch managers get read-only,
+  branch-scoped visibility.
+- **Routes and setup** – create routes, departures, organisations, stages,
+  hubs and landmarks.
+
+There is **no 3D bus simulator**. The vehicle visual is the 2D seat map in
+Counter → Issue ticket, shown after a departure and boarding/alighting stops are
+selected. A full bus-cabin simulation would be a separate front-end feature.
 
 ## Contributing
 

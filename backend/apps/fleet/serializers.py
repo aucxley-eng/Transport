@@ -1,14 +1,33 @@
 from rest_framework import serializers
 
+from apps.accounts.models import Branch
 from apps.fleet.models import Document, Driver, Vehicle
 
 
-class VehicleSerializer(serializers.ModelSerializer):
+class _BranchValidationMixin:
+    def validate(self, attrs):
+        organization = attrs.get("organization") or getattr(
+            self.instance, "organization", None
+        )
+        branch = attrs.get("branch")
+        if branch is not None and organization is not None:
+            if branch.organization_id != organization.pk:
+                raise serializers.ValidationError(
+                    {"branch": "Branch must belong to this organization."}
+                )
+        return attrs
+
+
+class VehicleSerializer(_BranchValidationMixin, serializers.ModelSerializer):
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
+
     class Meta:
         model = Vehicle
         fields = [
             "id",
             "organization",
+            "branch",
+            "branch_name",
             "registration_number",
             "vehicle_class",
             "make",
@@ -26,8 +45,9 @@ class VehicleSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
 
-class DriverSerializer(serializers.ModelSerializer):
+class DriverSerializer(_BranchValidationMixin, serializers.ModelSerializer):
     name = serializers.CharField(source="user.full_name", read_only=True, default="")
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
 
     class Meta:
         model = Driver
@@ -36,6 +56,8 @@ class DriverSerializer(serializers.ModelSerializer):
             "user",
             "name",
             "organization",
+            "branch",
+            "branch_name",
             "license_number",
             "license_expires_on",
             "status",

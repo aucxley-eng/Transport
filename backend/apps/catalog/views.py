@@ -25,6 +25,7 @@ class PlaceViewSet(viewsets.ModelViewSet):
     queryset = Place.objects.all()
     serializer_class = PlaceSerializer
     permission_classes = [IsAuthenticated]
+    filterset_fields = ["place_type", "is_active"]
 
     def get_queryset(self):
         return (

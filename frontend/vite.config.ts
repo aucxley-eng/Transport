@@ -1,6 +1,7 @@
 import { fileURLToPath, URL } from "node:url";
 
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 // The dev server proxies /api to the Django backend so the browser only ever
@@ -8,7 +9,7 @@ import { defineConfig } from "vite";
 // no second set of origins to keep in sync. In production the same path is
 // expected to be served by whatever fronts both the built assets and the API.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
